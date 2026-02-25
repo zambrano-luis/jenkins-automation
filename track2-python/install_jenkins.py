@@ -239,41 +239,35 @@ def step_configure_port():
 
 def step_disable_wizard():
     """
-    Step 5 — Disable the Jenkins setup wizard.
-    Idempotent: only modifies JAVA_ARGS if wizard flag is not already present.
-    Satisfies Requirement B — fully unattended, no manual unlock step.
-    Returns True if config was changed, False if already correct.
+    Step 5 — Disable the Jenkins setup wizard via systemd drop-in override.
+    Newer Jenkins reads JAVA_OPTS from the systemd unit Environment directive,
+    not from JAVA_ARGS in /etc/default/jenkins. A drop-in override is used so
+    the change survives Jenkins package upgrades without touching the unit file.
+    Idempotent: skips if override already contains the wizard disable flag.
+    Returns True if config was written, False if already at desired state.
     """
     log_step("Step 5/7 — Disabling Jenkins setup wizard")
 
-    wizard_flag = "-Djenkins.install.runSetupWizard=false"
+    wizard_flag   = "-Djenkins.install.runSetupWizard=false"
+    override_dir  = "/etc/systemd/system/jenkins.service.d"
+    override_file = f"{override_dir}/override.conf"
+    override_content = (
+        "[Service]\n"
+        f'Environment="JAVA_OPTS=-Djava.awt.headless=true {wizard_flag}"\n'
+    )
 
-    with open(JENKINS_CONFIG, "r") as f:
-        content = f.read()
-
-    if wizard_flag in content:
-        log_skip("Setup wizard already disabled")
+    # Idempotency check — skip if flag already present in override
+    if os.path.isfile(override_file) and file_contains(override_file, wizard_flag):
+        log_skip("Setup wizard already disabled via systemd override")
         return False
 
-    import re
+    log_info("Writing systemd drop-in override to disable setup wizard...")
+    os.makedirs(override_dir, exist_ok=True)
+    with open(override_file, "w") as f:
+        f.write(override_content)
 
-    # If JAVA_ARGS line exists, append flag to it
-    if re.search(r'^JAVA_ARGS="[^"]*"', content, re.MULTILINE):
-        log_info("Appending wizard disable flag to existing JAVA_ARGS")
-        content = re.sub(
-            r'^(JAVA_ARGS="[^"]*)"',
-            rf'\1 {wizard_flag}"',
-            content,
-            flags=re.MULTILINE
-        )
-    else:
-        log_info("Adding JAVA_ARGS with wizard disable flag")
-        content += f'\nJAVA_ARGS="{wizard_flag}"\n'
-
-    with open(JENKINS_CONFIG, "w") as f:
-        f.write(content)
-
-    log_ok("Setup wizard disabled")
+    run("systemctl daemon-reload")
+    log_ok("Setup wizard disabled via systemd override")
     return True
 
 
