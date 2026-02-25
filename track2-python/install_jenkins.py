@@ -20,7 +20,7 @@ import os
 import sys
 import subprocess
 import platform
-import urllib.request
+import urllib.error
 
 # ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
@@ -148,12 +148,23 @@ def step_add_jenkins_repo():
     """Step 3 — Add Jenkins apt repo and GPG key. Idempotent: skips if both exist."""
     log_step("Step 3/7 — Adding Jenkins apt repository")
 
-    # GPG key — skip if already present
+    # GPG key — skip only if file exists AND is valid binary (not ASCII-armored)
+    key_valid = False
     if os.path.isfile(JENKINS_KEYRING):
-        log_skip("Jenkins GPG key already present")
+        with open(JENKINS_KEYRING, "rb") as f:
+            header = f.read(10)
+        # ASCII-armored files start with "-----BEGIN" — binary keyrings do not
+        if not header.startswith(b"-----"):
+            key_valid = True
+
+    if key_valid:
+        log_skip("Jenkins GPG key already present and valid")
     else:
-        log_info("Importing Jenkins GPG key...")
-        urllib.request.urlretrieve(JENKINS_KEY_URL, JENKINS_KEYRING)
+        if os.path.isfile(JENKINS_KEYRING):
+            log_info("Jenkins GPG key exists but is invalid format — reimporting...")
+        else:
+            log_info("Importing Jenkins GPG key...")
+        run(f"curl -fsSL {JENKINS_KEY_URL} | gpg --dearmor -o {JENKINS_KEYRING}")
         os.chmod(JENKINS_KEYRING, 0o644)
         log_ok("GPG key imported")
 
@@ -290,6 +301,7 @@ def step_validate():
     log_step(f"Step 8/7 — Validating Jenkins is responding on port {JENKINS_PORT}")
 
     import time
+    import urllib.request
     import urllib.error
 
     max_wait  = 60
