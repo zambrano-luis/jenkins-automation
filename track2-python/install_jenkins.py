@@ -196,9 +196,10 @@ def step_install_jenkins():
 
 def step_configure_port():
     """
-    Step 5 — Configure Jenkins to listen on port 8000.
+    Step 4 — Configure Jenkins to listen on port 8000.
     Idempotent: only writes if HTTP_PORT is not already set to 8000.
     Satisfies Requirement C — Jenkins JVM itself binds to 8000.
+    Returns True if config was changed, False if already correct.
     """
     log_step(f"Step 4/7 — Configuring Jenkins to listen on port {JENKINS_PORT}")
 
@@ -215,14 +216,13 @@ def step_configure_port():
     # Idempotency check — already set to 8000
     if target_line in content:
         log_skip(f"HTTP_PORT is already set to {JENKINS_PORT}")
-        return
+        return False
 
     # Replace existing HTTP_PORT line if present, otherwise append
     if default_line in content:
         log_info(f"Replacing HTTP_PORT=8080 with HTTP_PORT={JENKINS_PORT}")
         content = content.replace(default_line, target_line)
     elif "HTTP_PORT=" in content:
-        # Handle any other port value
         import re
         log_info(f"Replacing existing HTTP_PORT value with {JENKINS_PORT}")
         content = re.sub(r"HTTP_PORT=\d+", target_line, content)
@@ -234,13 +234,15 @@ def step_configure_port():
         f.write(content)
 
     log_ok(f"Jenkins configured to listen on port {JENKINS_PORT}")
+    return True
 
 
 def step_disable_wizard():
     """
-    Step 6 — Disable the Jenkins setup wizard.
+    Step 5 — Disable the Jenkins setup wizard.
     Idempotent: only modifies JAVA_ARGS if wizard flag is not already present.
     Satisfies Requirement B — fully unattended, no manual unlock step.
+    Returns True if config was changed, False if already correct.
     """
     log_step("Step 5/7 — Disabling Jenkins setup wizard")
 
@@ -251,7 +253,7 @@ def step_disable_wizard():
 
     if wizard_flag in content:
         log_skip("Setup wizard already disabled")
-        return
+        return False
 
     import re
 
@@ -272,12 +274,14 @@ def step_disable_wizard():
         f.write(content)
 
     log_ok("Setup wizard disabled")
+    return True
 
 
-def step_enable_and_restart():
+def step_enable_and_restart(restart_required):
     """
-    Step 7 — Enable Jenkins on boot and restart to apply config changes.
-    Idempotent: only restarts if config was changed or service is not running.
+    Step 6 — Enable Jenkins on boot and restart only if needed.
+    restart_required is True only when port or wizard config was not already
+    at desired state and was written during this run.
     """
     log_step("Step 6/7 — Enabling and starting Jenkins service")
 
@@ -289,10 +293,17 @@ def step_enable_and_restart():
         run("systemctl enable jenkins")
         log_ok("Jenkins enabled on boot")
 
-    # Always restart to apply any config changes
-    log_info("Restarting Jenkins to apply configuration...")
-    run("systemctl restart jenkins")
-    log_ok("Jenkins service restarted")
+    # Only restart if desired state was not already met
+    if restart_required:
+        log_info("Configuration was updated — restarting Jenkins to apply changes...")
+        run("systemctl restart jenkins")
+        log_ok("Jenkins service restarted")
+    elif not service_is_active(JENKINS_PACKAGE):
+        log_info("Jenkins is not running — starting service...")
+        run("systemctl start jenkins")
+        log_ok("Jenkins service started")
+    else:
+        log_skip("Jenkins already running on port 8000 with correct config — no restart needed")
 
 
 def step_validate():
@@ -364,9 +375,9 @@ def main():
     step_install_java()
     step_add_jenkins_repo()
     step_install_jenkins()
-    step_configure_port()
-    step_disable_wizard()
-    step_enable_and_restart()
+    port_needs_restart   = step_configure_port()
+    wizard_needs_restart = step_disable_wizard()
+    step_enable_and_restart(restart_required=port_needs_restart or wizard_needs_restart)
     step_validate()
 
     log_summary()
