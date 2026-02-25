@@ -7,7 +7,7 @@
 param(
     [string]$StackName = "jenkins-linux-demo",
     [string]$Region = "us-west-2",
-    [string]$Template = "aws-demo-cf-templates\jenkins-linux.yaml"
+    [string]$Template = "..\aws-demo-cf-templates\jenkins-linux.yaml"
 )
 
 $ErrorActionPreference = "Stop"

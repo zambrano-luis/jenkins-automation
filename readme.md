@@ -24,21 +24,22 @@ Every track in this repository satisfies the same four requirements:
 ```
 jenkins-automation/
 ├── README.md
-├── Vagrantfile                           # Local Linux replication (Track 1B + Track 2)
+├── .gitignore
+├── Vagrantfile                                    # Local Linux replication
 ├── track1-puppet/
 │   ├── manifests/
-│   │   └── jenkins.pp                   # Puppet manifest (shared across both OS targets)
-│   ├── install_jenkins_puppet.py        # Linux bootstrap - Python -> puppet apply
-│   └── install_jenkins_puppet.ps1       # Windows bootstrap - PowerShell -> puppet apply
+│   │   └── jenkins.pp                            # Puppet manifest (shared across OS targets)
+│   ├── install_jenkins_puppet.py                 # Linux bootstrap - Python -> puppet apply
+│   └── install_jenkins_puppet.ps1                # Windows bootstrap - PowerShell -> puppet apply
 ├── track2-python/
-│   └── install_jenkins.py               # Pure Python - Ubuntu 20.04+ LTS
+│   ├── install_jenkins.py                        # Pure Python installer - Ubuntu 20.04+ LTS
+│   ├── deploy-track2-linux.ps1                   # PowerShell deploy script (Windows)
+│   ├── deploy-track2-linux.sh                    # Bash deploy script (Linux/macOS)
+│   ├── cleanup-track2-linux.ps1                  # PowerShell cleanup script (Windows)
+│   └── cleanup-track2-linux.sh                   # Bash cleanup script (Linux/macOS)
 └── aws-demo-cf-templates/
-    ├── jenkins-linux.yaml               # CloudFormation - Ubuntu EC2
-    ├── jenkins-windows.yaml             # CloudFormation - Windows Server 2022 EC2
-    ├── deploy-linux.ps1                 # PowerShell deploy script (Windows)
-    ├── deploy-linux.sh                  # Bash deploy script (Linux/macOS)
-    ├── cleanup-linux.ps1                # PowerShell cleanup script (Windows)
-    └── cleanup-linux.sh                 # Bash cleanup script (Linux/macOS)
+    ├── jenkins-linux.yaml                        # CloudFormation - Ubuntu EC2
+    └── jenkins-windows.yaml                      # CloudFormation - Windows Server 2022 EC2
 ```
 
 ---
@@ -89,24 +90,34 @@ The key pair is created by the stack and stored automatically in AWS SSM Paramet
 
 **Deploy - Windows (PowerShell)**
 
+> **Note:** Windows may block unsigned scripts. Use the `-ExecutionPolicy Bypass` flag:
+
 ```powershell
-.\aws-demo-cf-templates\deploy-linux.ps1
+powershell.exe -ExecutionPolicy Bypass -File track2-python\deploy-track2-linux.ps1
 ```
 
 Optional parameters:
 ```powershell
-.\aws-demo-cf-templates\deploy-linux.ps1 -StackName my-stack -Region us-east-1
+powershell.exe -ExecutionPolicy Bypass -File track2-python\deploy-track2-linux.ps1 -StackName my-stack -Region us-east-1
 ```
 
 **Deploy - Linux / macOS (Bash)**
 
+> **Note:** After cloning, make scripts executable first:
+
 ```bash
-./aws-demo-cf-templates/deploy-linux.sh
+chmod +x track2-python/*.sh
+```
+
+Then deploy:
+
+```bash
+./track2-python/deploy-track2-linux.sh
 ```
 
 Optional parameters:
 ```bash
-./aws-demo-cf-templates/deploy-linux.sh my-stack us-east-1
+./track2-python/deploy-track2-linux.sh my-stack us-east-1
 ```
 
 Both scripts handle the full deploy flow automatically:
@@ -122,23 +133,41 @@ Both scripts handle the full deploy flow automatically:
 **Cleanup - Windows (PowerShell)**
 
 ```powershell
-.\aws-demo-cf-templates\cleanup-linux.ps1
+powershell.exe -ExecutionPolicy Bypass -File track2-python\cleanup-track2-linux.ps1
 ```
 
 **Cleanup - Linux / macOS (Bash)**
 
 ```bash
-./aws-demo-cf-templates/cleanup-linux.sh
+./track2-python/cleanup-track2-linux.sh
 ```
 
 Cleanup deletes the stack, waits for full deletion, and removes the local `jenkins-demo.pem` file.
 
 ---
 
+#### Local Configuration
+
+To use a custom AWS profile or region, copy the deploy or cleanup script and modify locally:
+
+```powershell
+Copy-Item track2-python\deploy-track2-linux.ps1 track2-python\deploy-track2-linux-local.ps1
+Copy-Item track2-python\cleanup-track2-linux.ps1 track2-python\cleanup-track2-linux-local.ps1
+```
+
+```bash
+cp track2-python/deploy-track2-linux.sh track2-python/deploy-track2-linux-local.sh
+cp track2-python/cleanup-track2-linux.sh track2-python/cleanup-track2-linux-local.sh
+```
+
+Local variants are excluded from version control via `.gitignore`.
+
+---
+
 #### Windows (Windows Server 2022)
 
 ```powershell
-.\aws-demo-cf-templates\deploy-windows.ps1
+powershell.exe -ExecutionPolicy Bypass -File track2-python\deploy-track2-windows.ps1
 ```
 
 > AWS handles the Windows Server license through the AMI. Scripts are also provided for replication in any licensed Windows Server environment.
@@ -189,22 +218,6 @@ Re-running any script against an already-provisioned system skips all completed 
 
 ---
 
-## Local Configuration
-
-To use a custom AWS profile or region, copy the deploy script and modify locally:
-
-```powershell
-Copy-Item aws-demo-cf-templates\deploy-linux.ps1 deploy-linux-local.ps1
-```
-
-```bash
-cp aws-demo-cf-templates/deploy-linux.sh deploy-linux-local.sh
-```
-
-Local variants are excluded from version control via `.gitignore`.
-
----
-
 ## Minimum Requirements
 
 | Resource | Minimum | Recommended |
@@ -222,7 +235,7 @@ Local variants are excluded from version control via `.gitignore`.
 
 - Linux tracks assume a Debian-based distribution (Ubuntu 20.04+)
 - Scripts must be run as root (`sudo`) on Linux
-- Windows scripts must be run in an elevated PowerShell session
+- Windows scripts must be run with `-ExecutionPolicy Bypass` or from an elevated session
 - Internet access is required to download Jenkins packages and the Puppet agent
 - AWS CLI must be configured with appropriate permissions to deploy CloudFormation stacks
 
