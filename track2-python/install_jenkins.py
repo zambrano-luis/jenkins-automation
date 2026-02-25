@@ -164,8 +164,10 @@ def step_add_jenkins_repo():
             log_info("Jenkins GPG key exists but is invalid format — reimporting...")
         else:
             log_info("Importing Jenkins GPG key...")
-        run(f"curl -fsSL {JENKINS_KEY_URL} | gpg --dearmor -o {JENKINS_KEYRING}")
+        run(f"curl -fsSL {JENKINS_KEY_URL} | gpg --batch --yes --dearmor -o {JENKINS_KEYRING}")
         os.chmod(JENKINS_KEYRING, 0o644)
+        # Always refresh apt after key change so Jenkins package becomes available
+        run("apt-get update -qq")
         log_ok("GPG key imported")
 
     # Repo entry — skip if already present
