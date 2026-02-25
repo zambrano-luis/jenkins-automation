@@ -256,10 +256,19 @@ def step_disable_wizard():
         f'Environment="JAVA_OPTS=-Djava.awt.headless=true {wizard_flag}"\n'
     )
 
-    # Idempotency check — skip if flag already present in override
+    # Idempotency check — skip writing if flag already present in override
     if os.path.isfile(override_file) and file_contains(override_file, wizard_flag):
-        log_skip("Setup wizard already disabled via systemd override")
-        return False
+        # Check if systemd has actually loaded this override
+        result = run("systemctl show jenkins --property=Environment", check=False)
+        if wizard_flag in result.stdout:
+            run("systemctl daemon-reload")
+            log_skip("Setup wizard already disabled via systemd override")
+            return False
+        else:
+            # Override file exists but systemd hasn't loaded it yet — reload needed
+            log_info("Override file present but not loaded by systemd — reloading...")
+            run("systemctl daemon-reload")
+            return True
 
     log_info("Writing systemd drop-in override to disable setup wizard...")
     os.makedirs(override_dir, exist_ok=True)
