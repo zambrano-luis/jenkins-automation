@@ -1,8 +1,8 @@
 # Jenkins Automation
 
-Automated installation and configuration of Jenkins CI server across multiple platforms and toolchains. This repository is a technical assessment submission demonstrating infrastructure automation, idempotency, and cross-platform provisioning.
+Automated installation and configuration of Jenkins CI server across multiple platforms and toolchains demonstrating infrastructure automation, idempotency, and cross-platform provisioning.
 
-Jenkins is configured to listen natively on **port 8000** in all tracks — not via port forwarding, proxy, or NAT.
+Jenkins is configured to listen natively on **port 8000** in all tracks - not via port forwarding, proxy, or NAT.
 
 ---
 
@@ -14,7 +14,7 @@ Every track in this repository satisfies the same four requirements:
 |-----|-------------|
 | **A** | Runs on a clean OS installation without errors |
 | **B** | Jenkins and prerequisites install without manual intervention |
-| **C** | Jenkins itself listens on port 8000 — not a proxy or forward |
+| **C** | Jenkins itself listens on port 8000 - not a proxy or forward |
 | **D** | Re-running produces no failures and no duplicate configuration |
 
 ---
@@ -24,34 +24,38 @@ Every track in this repository satisfies the same four requirements:
 ```
 jenkins-automation/
 ├── README.md
-├── Vagrantfile                          # Local Linux replication (Track 1B + Track 2)
+├── Vagrantfile                           # Local Linux replication (Track 1B + Track 2)
 ├── track1-puppet/
 │   ├── manifests/
-│   │   └── jenkins.pp                  # Puppet manifest (shared across both OS targets)
-│   ├── install_jenkins_puppet.py       # Linux bootstrap — Python → puppet apply
-│   └── install_jenkins_puppet.ps1      # Windows bootstrap — PowerShell → puppet apply
+│   │   └── jenkins.pp                   # Puppet manifest (shared across both OS targets)
+│   ├── install_jenkins_puppet.py        # Linux bootstrap - Python -> puppet apply
+│   └── install_jenkins_puppet.ps1       # Windows bootstrap - PowerShell -> puppet apply
 ├── track2-python/
-│   └── install_jenkins.py              # Pure Python — Ubuntu 20.04+ LTS
+│   └── install_jenkins.py               # Pure Python - Ubuntu 20.04+ LTS
 └── aws-demo-cf-templates/
-    ├── jenkins-linux.yaml              # CloudFormation — Ubuntu EC2
-    └── jenkins-windows.yaml            # CloudFormation — Windows Server 2022 EC2
+    ├── jenkins-linux.yaml               # CloudFormation - Ubuntu EC2
+    ├── jenkins-windows.yaml             # CloudFormation - Windows Server 2022 EC2
+    ├── deploy-linux.ps1                 # PowerShell deploy script (Windows)
+    ├── deploy-linux.sh                  # Bash deploy script (Linux/macOS)
+    ├── cleanup-linux.ps1                # PowerShell cleanup script (Windows)
+    └── cleanup-linux.sh                 # Bash cleanup script (Linux/macOS)
 ```
 
 ---
 
 ## Tracks
 
-### Track 1 — Python / PowerShell + Puppet (Masterless)
+### Track 1 - Python / PowerShell + Puppet (Masterless)
 
-The bootstrap layer installs Puppet agent silently, then runs `puppet apply` against the shared manifest. The manifest is OS-agnostic — only the bootstrap differs between platforms.
+The bootstrap layer installs Puppet agent silently, then runs `puppet apply` against the shared manifest. The manifest is OS-agnostic - only the bootstrap differs between platforms.
 
-**Track 1B — Linux (Ubuntu 22.04 LTS)**
+**Track 1B - Linux (Ubuntu 22.04 LTS)**
 
 ```bash
 sudo python3 track1-puppet/install_jenkins_puppet.py
 ```
 
-**Track 1A — Windows (Windows Server 2022)**
+**Track 1A - Windows (Windows Server 2022)**
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File track1-puppet\install_jenkins_puppet.ps1
@@ -59,7 +63,7 @@ powershell.exe -ExecutionPolicy Bypass -File track1-puppet\install_jenkins_puppe
 
 ---
 
-### Track 2 — Pure Python
+### Track 2 - Pure Python
 
 Single self-contained script. No dependencies beyond Python 3 stdlib. Designed for Ubuntu 20.04+ LTS where Python 3 ships by default.
 
@@ -69,38 +73,81 @@ sudo python3 track2-python/install_jenkins.py
 
 ---
 
-### AWS Demo — CloudFormation Templates
+### AWS Demo - CloudFormation Templates
 
-Provisions an EC2 instance, configures the security group to expose port 8000, and runs the appropriate script via UserData on first boot. The instance pulls the provisioning script directly from this repository.
+Provisions a fully self-contained EC2 environment including security group and SSH key pair. No pre-existing key pairs or manual setup required. The instance pulls the provisioning script directly from this repository via UserData on first boot.
 
-**Linux (Ubuntu 22.04 LTS):**
+The key pair is created by the stack and stored automatically in AWS SSM Parameter Store. It is deleted when the stack is deleted. Retrieve it once immediately after deploy.
 
-Deploy via AWS Console — upload `aws-demo-cf-templates/jenkins-linux.yaml`
+**Prerequisites:**
+- AWS CLI installed and configured
+- Active AWS session (SSO, access keys, or instance profile)
 
-Or via CLI:
-```bash
-aws cloudformation deploy \
-  --template-file aws-demo-cf-templates/jenkins-linux.yaml \
-  --stack-name jenkins-linux \
-  --capabilities CAPABILITY_IAM
+---
+
+#### Linux (Ubuntu 22.04 LTS)
+
+**Deploy - Windows (PowerShell)**
+
+```powershell
+.\aws-demo-cf-templates\deploy-linux.ps1
 ```
 
-**Windows (Windows Server 2022):**
-
-```bash
-aws cloudformation deploy \
-  --template-file aws-demo-cf-templates/jenkins-windows.yaml \
-  --stack-name jenkins-windows \
-  --capabilities CAPABILITY_IAM
+Optional parameters:
+```powershell
+.\aws-demo-cf-templates\deploy-linux.ps1 -StackName my-stack -Region us-east-1
 ```
 
-> **Note:** Windows track validated on AWS EC2 Windows Server 2022. Scripts are provided for replication in any licensed Windows Server environment. AWS handles the Windows Server license through the AMI.
+**Deploy - Linux / macOS (Bash)**
+
+```bash
+./aws-demo-cf-templates/deploy-linux.sh
+```
+
+Optional parameters:
+```bash
+./aws-demo-cf-templates/deploy-linux.sh my-stack us-east-1
+```
+
+Both scripts handle the full deploy flow automatically:
+
+1. Validate AWS session
+2. Detect your public IP and lock the security group to it
+3. Deploy the CloudFormation stack
+4. Retrieve stack outputs
+5. Pull the private key from SSM Parameter Store
+6. Set correct key file permissions
+7. Print the Jenkins URL and SSH command
+
+**Cleanup - Windows (PowerShell)**
+
+```powershell
+.\aws-demo-cf-templates\cleanup-linux.ps1
+```
+
+**Cleanup - Linux / macOS (Bash)**
+
+```bash
+./aws-demo-cf-templates/cleanup-linux.sh
+```
+
+Cleanup deletes the stack, waits for full deletion, and removes the local `jenkins-demo.pem` file.
+
+---
+
+#### Windows (Windows Server 2022)
+
+```powershell
+.\aws-demo-cf-templates\deploy-windows.ps1
+```
+
+> AWS handles the Windows Server license through the AMI. Scripts are also provided for replication in any licensed Windows Server environment.
 
 ---
 
 ## Local Replication (Linux)
 
-Replicate the Linux tracks locally using Vagrant and VirtualBox — no cloud account required.
+Replicate the Linux tracks locally using Vagrant and VirtualBox - no cloud account required.
 
 **Prerequisites:**
 - [Vagrant](https://www.vagrantup.com/downloads)
@@ -124,7 +171,7 @@ After any track completes, confirm Jenkins is running on port 8000:
 curl -I http://localhost:8000
 ```
 
-Expected response: `HTTP/1.1 403 Forbidden` — this confirms Jenkins is running and responding on port 8000. The 403 is expected because Jenkins requires authentication; it is not an error.
+Expected response: `HTTP/1.1 403 Forbidden` - this confirms Jenkins is running and responding on port 8000. The 403 is expected because Jenkins requires authentication; it is not an error.
 
 ---
 
@@ -132,12 +179,29 @@ Expected response: `HTTP/1.1 403 Forbidden` — this confirms Jenkins is running
 
 All tracks are safe to re-run. Each step checks current state before acting:
 
-- Package installations check `dpkg -l` status before calling apt
-- Config file edits check for existing values before writing
+- Package installations check `dpkg` status before calling apt - skipped if already installed
+- GPG key validated as correct format before re-importing
+- Config file edits check for existing values before writing - skipped if already correct
+- Jenkins service restart only triggered if config was not already at desired state
 - Puppet's declarative model converges to desired state natively
-- Service restarts only apply config changes — they do not re-install
 
-Re-running any script against an already-provisioned system will skip completed steps and exit cleanly.
+Re-running any script against an already-provisioned system skips all completed steps and exits cleanly in seconds.
+
+---
+
+## Local Configuration
+
+To use a custom AWS profile or region, copy the deploy script and modify locally:
+
+```powershell
+Copy-Item aws-demo-cf-templates\deploy-linux.ps1 deploy-linux-local.ps1
+```
+
+```bash
+cp aws-demo-cf-templates/deploy-linux.sh deploy-linux-local.sh
+```
+
+Local variants are excluded from version control via `.gitignore`.
 
 ---
 
@@ -166,4 +230,4 @@ Re-running any script against an already-provisioned system will skip completed 
 
 ## Author
 
-Luis Zambrano — [github.com/zambrano-luis](https://github.com/zambrano-luis)
+Luis Zambrano - [github.com/zambrano-luis](https://github.com/zambrano-luis)

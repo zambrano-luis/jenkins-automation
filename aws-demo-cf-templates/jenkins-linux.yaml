@@ -3,19 +3,15 @@ Description: >
   Jenkins Automation - Linux Demo (Ubuntu 22.04 LTS)
   Provisions a t3.medium EC2 instance, installs Jenkins via Track 2 (Pure Python),
   and configures Jenkins to listen natively on port 8000.
-  Security group locked to deployer IP. SSH key consistent across re-deploys.
+  Key pair is created by the stack and stored in SSM Parameter Store.
+  Security group locked to deployer IP passed at deploy time.
 
-# ─── PARAMETERS ───────────────────────────────────────────────────────────────
+# --- PARAMETERS ---------------------------------------------------------------
 Parameters:
-
-  KeyPairName:
-    Type: AWS::EC2::KeyPair::KeyName
-    Default: perforce-jenkins-demo
-    Description: EC2 Key Pair for SSH access
 
   DeployerIP:
     Type: String
-    Description: Your public IP in CIDR notation. Restricts SSH and Jenkins access to this IP only. Pass at deploy time using --parameter-overrides DeployerIP="$(curl -s https://checkip.amazonaws.com).Trim()/32"
+    Description: Your public IP in CIDR notation. Restricts SSH and Jenkins to this IP only.
 
   InstanceType:
     Type: String
@@ -24,87 +20,84 @@ Parameters:
       - t3.small
       - t3.medium
       - t3.large
-    Description: EC2 instance type t3.medium recommended
+    Description: EC2 instance type - t3.medium recommended for stable Jenkins demo
 
   UbuntuAMI:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
-    Description: Latest Ubuntu 22.04 LTS AMI. Resolved automatically via SSM at deploy time
+    Description: Latest Ubuntu 22.04 LTS AMI - resolved automatically via SSM at deploy time
 
   ScriptURL:
     Type: String
     Default: https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track2-python/install_jenkins.py
     Description: Raw GitHub URL to the Python installer script
 
-# ─── MAPPINGS ─────────────────────────────────────────────────────────────────
-# No static AMI mappings needed. AMI resolved dynamically via SSM Parameter
-# Store at deploy time, always returning the latest official Canonical Ubuntu
-# 22.04 LTS image for the deployed region. This avoids stale AMI ID failures.
-
-# ─── RESOURCES ────────────────────────────────────────────────────────────────
+# --- RESOURCES ----------------------------------------------------------------
 Resources:
 
-  # ── Security Group ──────────────────────────────────────────────────────────
+  # Key Pair
+  # CloudFormation creates the key pair and stores the private key automatically
+  # in AWS SSM Parameter Store at /ec2/keypair/<key-pair-id> as a SecureString.
+  # Retrieve it once after deploy using the KeyPairSSMPath output below.
+  # The key pair is deleted automatically when the stack is deleted.
+  JenkinsKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: jenkins-demo-key
+      Tags:
+        - Key: Name
+          Value: jenkins-demo-key
+        - Key: Project
+          Value: jenkins-automation
+
+  # Security Group
   JenkinsSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupName: jenkins-demo-sg
-      GroupDescription: Jenkins demo. SSH and port 8000 restricted to deployer IP
+      GroupDescription: Jenkins demo - SSH and port 8000 restricted to deployer IP
       SecurityGroupIngress:
-
-        # SSH - locked to deployer IP only
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
           CidrIp: !Ref DeployerIP
-          Description: SSH access. Deployer IP only
-
-        # Jenkins on port 8000 - locked to deployer IP only
+          Description: SSH access - deployer IP only
         - IpProtocol: tcp
           FromPort: 8000
           ToPort: 8000
           CidrIp: !Ref DeployerIP
-          Description: Jenkins UI. Deployer IP only
-
+          Description: Jenkins UI - deployer IP only
       Tags:
         - Key: Name
           Value: jenkins-demo-sg
         - Key: Project
           Value: jenkins-automation
 
-  # ── EC2 Instance ─────────────────────────────────────────────────────────────
+  # EC2 Instance
   JenkinsInstance:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref InstanceType
-      KeyName: !Ref KeyPairName
+      KeyName: !Ref JenkinsKeyPair
       ImageId: !Ref UbuntuAMI
       SecurityGroupIds:
         - !Ref JenkinsSecurityGroup
-
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
             VolumeSize: 20
             VolumeType: gp3
             DeleteOnTermination: true
-
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -e
-
-          # Log all output to CloudWatch-friendly location
           exec > >(tee /var/log/jenkins-install.log) 2>&1
-
           echo "==> Downloading Jenkins installer from GitHub..."
           curl -fsSL -o /tmp/install_jenkins.py ${ScriptURL}
-
           echo "==> Running Jenkins installer..."
           python3 /tmp/install_jenkins.py
-
-          echo "==> Installation complete. Jenkins should be running on port 8000."
-
+          echo "==> Installation complete. Jenkins is running on port 8000."
       Tags:
         - Key: Name
           Value: jenkins-demo-linux
@@ -113,7 +106,7 @@ Resources:
         - Key: Track
           Value: Track2-Python
 
-# ─── OUTPUTS ──────────────────────────────────────────────────────────────────
+# --- OUTPUTS ------------------------------------------------------------------
 Outputs:
 
   InstanceID:
@@ -125,12 +118,20 @@ Outputs:
     Value: !GetAtt JenkinsInstance.PublicIp
 
   JenkinsURL:
-    Description: Jenkins URL. Open this in your browser once provisioning completes
+    Description: Jenkins URL - open in browser once provisioning completes (allow 2-3 min)
     Value: !Sub http://${JenkinsInstance.PublicIp}:8000
 
+  KeyPairID:
+    Description: Key pair ID - used to retrieve private key from SSM
+    Value: !GetAtt JenkinsKeyPair.KeyPairId
+
+  KeyPairSSMPath:
+    Description: SSM Parameter Store path containing the private key - retrieve once after deploy
+    Value: !Sub /ec2/keypair/${JenkinsKeyPair.KeyPairId}
+
   SSHCommand:
-    Description: SSH command to connect to the instance
-    Value: !Sub ssh -i perforce-jenkins-demo.pem ubuntu@${JenkinsInstance.PublicIp}
+    Description: SSH command to connect - run after retrieving and fixing key permissions
+    Value: !Sub ssh -i jenkins-demo.pem ubuntu@${JenkinsInstance.PublicIp}
 
   InstallLog:
     Description: View installation log on the instance

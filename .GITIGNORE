@@ -1,0 +1,8 @@
+# Local deploy scripts with personal config (profiles, regions, etc.)
+track2-python/deploy-track2-linux-local.ps1
+track2-python/deploy-track2-windows-local.ps1
+track2-python/cleanup-track2-linux-local.ps1
+track2-python/cleanup-track2-windows-local.ps1
+
+# Private keys - never commit
+*.pem
