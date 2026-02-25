@@ -146,7 +146,7 @@ def step_install_java():
 
 def step_add_jenkins_repo():
     """Step 3 — Add Jenkins apt repo and GPG key. Idempotent: skips if both exist."""
-    log_step("Step 3/7 — Adding Jenkins apt repository")
+    log_step("Step 2/7 — Adding Jenkins apt repository")
 
     # GPG key — skip only if file exists AND contains the correct key header
     key_valid = False
@@ -183,7 +183,7 @@ def step_add_jenkins_repo():
 
 def step_install_jenkins():
     """Step 4 — Install Jenkins LTS. Idempotent: skips if already installed."""
-    log_step("Step 4/7 — Installing Jenkins LTS")
+    log_step("Step 3/7 — Installing Jenkins LTS")
 
     if is_package_installed(JENKINS_PACKAGE):
         log_skip("Jenkins is already installed")
@@ -200,7 +200,7 @@ def step_configure_port():
     Idempotent: only writes if HTTP_PORT is not already set to 8000.
     Satisfies Requirement C — Jenkins JVM itself binds to 8000.
     """
-    log_step(f"Step 5/7 — Configuring Jenkins to listen on port {JENKINS_PORT}")
+    log_step(f"Step 4/7 — Configuring Jenkins to listen on port {JENKINS_PORT}")
 
     target_line  = f"HTTP_PORT={JENKINS_PORT}"
     default_line = "HTTP_PORT=8080"
@@ -242,7 +242,7 @@ def step_disable_wizard():
     Idempotent: only modifies JAVA_ARGS if wizard flag is not already present.
     Satisfies Requirement B — fully unattended, no manual unlock step.
     """
-    log_step("Step 6/7 — Disabling Jenkins setup wizard")
+    log_step("Step 5/7 — Disabling Jenkins setup wizard")
 
     wizard_flag = "-Djenkins.install.runSetupWizard=false"
 
@@ -279,7 +279,7 @@ def step_enable_and_restart():
     Step 7 — Enable Jenkins on boot and restart to apply config changes.
     Idempotent: only restarts if config was changed or service is not running.
     """
-    log_step("Step 7/7 — Enabling and starting Jenkins service")
+    log_step("Step 6/7 — Enabling and starting Jenkins service")
 
     # Enable on boot
     if service_is_enabled(JENKINS_PACKAGE):
@@ -297,16 +297,16 @@ def step_enable_and_restart():
 
 def step_validate():
     """
-    Step 8 — Validate Jenkins is running and responding on port 8000.
+    Step 7 — Validate Jenkins is running and responding on port 8000.
     Polls up to 60 seconds for Jenkins to become ready.
     """
-    log_step(f"Step 8/7 — Validating Jenkins is responding on port {JENKINS_PORT}")
+    log_step(f"Step 7/7 — Validating Jenkins is responding on port {JENKINS_PORT}")
 
     import time
     import urllib.request
     import urllib.error
 
-    max_wait  = 60
+    max_wait  = 120
     interval  = 5
     elapsed   = 0
     url       = f"http://localhost:{JENKINS_PORT}"
