@@ -1,6 +1,7 @@
 # Jenkins Automation
 
-Automated installation and configuration of Jenkins CI server across multiple platforms and toolchains. This repository is a technical assessment submission demonstrating infrastructure automation, idempotency, and cross-platform provisioning.
+Automated installation and configuration of Jenkins CI server across multiple platforms and toolchains. 
+This repository is a practice to demonstrate infrastructure automation, idempotency, and cross-platform provisioning.
 
 Jenkins is configured to listen natively on **port 8000** in all tracks — not via port forwarding, proxy, or NAT.
 
