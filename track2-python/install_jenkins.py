@@ -254,13 +254,14 @@ def step_disable_wizard():
     override_content = (
         "[Service]\n"
         f'Environment="JAVA_OPTS=-Djava.awt.headless=true {wizard_flag}"\n'
+        f'Environment="JENKINS_PORT={JENKINS_PORT}"\n'
     )
 
     # Idempotency check — skip writing if flag already present in override
     if os.path.isfile(override_file) and file_contains(override_file, wizard_flag):
         # Check if systemd has actually loaded this override
         result = run("systemctl show jenkins --property=Environment", check=False)
-        if wizard_flag in result.stdout:
+        if wizard_flag in result.stdout and f"JENKINS_PORT={JENKINS_PORT}" in result.stdout:
             run("systemctl daemon-reload")
             log_skip("Setup wizard already disabled via systemd override")
             return False
