@@ -29,7 +29,7 @@ JENKINS_CONFIG     = "/etc/default/jenkins"
 JENKINS_HOME       = "/var/lib/jenkins"
 JENKINS_KEYRING    = "/usr/share/keyrings/jenkins-keyring.asc"
 JENKINS_REPO_FILE  = "/etc/apt/sources.list.d/jenkins.list"
-JENKINS_KEY_URL    = "https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key"
+JENKINS_KEY_URL    = "https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key"
 JENKINS_REPO_LINE  = "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/"
 JAVA_PACKAGE       = "openjdk-17-jdk"
 JENKINS_PACKAGE    = "jenkins"
@@ -148,23 +148,23 @@ def step_add_jenkins_repo():
     """Step 3 — Add Jenkins apt repo and GPG key. Idempotent: skips if both exist."""
     log_step("Step 3/7 — Adding Jenkins apt repository")
 
-    # GPG key — skip only if file exists AND is valid binary (not ASCII-armored)
+    # GPG key — skip only if file exists AND contains the correct key header
     key_valid = False
     if os.path.isfile(JENKINS_KEYRING):
         with open(JENKINS_KEYRING, "rb") as f:
-            header = f.read(10)
-        # ASCII-armored files start with "-----BEGIN" — binary keyrings do not
-        if not header.startswith(b"-----"):
+            header = f.read(50)
+        # Valid ASCII-armored key starts with -----BEGIN PGP PUBLIC KEY BLOCK-----
+        if b"BEGIN PGP PUBLIC KEY BLOCK" in header:
             key_valid = True
 
     if key_valid:
         log_skip("Jenkins GPG key already present and valid")
     else:
         if os.path.isfile(JENKINS_KEYRING):
-            log_info("Jenkins GPG key exists but is invalid format — reimporting...")
+            log_info("Jenkins GPG key exists but is invalid — reimporting...")
         else:
             log_info("Importing Jenkins GPG key...")
-        run(f"curl -fsSL {JENKINS_KEY_URL} | gpg --batch --yes --dearmor -o {JENKINS_KEYRING}")
+        run(f"curl -fsSL {JENKINS_KEY_URL} | tee {JENKINS_KEYRING} > /dev/null")
         os.chmod(JENKINS_KEYRING, 0o644)
         # Always refresh apt after key change so Jenkins package becomes available
         run("apt-get update -qq")
