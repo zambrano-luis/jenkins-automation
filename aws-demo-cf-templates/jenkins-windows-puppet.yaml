@@ -4,6 +4,7 @@ Description: >
   Provisions a t3.medium EC2 instance, bootstraps Puppet agent via PowerShell,
   and applies the Jenkins manifest to configure Jenkins on port 8000.
   Key pair is created by the stack for RDP password decryption.
+  IAM instance profile attached for SSM Fleet Manager access.
   Security group locked to deployer IP passed at deploy time.
 
 # --- PARAMETERS ---------------------------------------------------------------
@@ -34,6 +35,33 @@ Parameters:
 
 # --- RESOURCES ----------------------------------------------------------------
 Resources:
+
+  # IAM Role for SSM Fleet Manager access
+  # Allows browser-based RDP and remote PowerShell via AWS Systems Manager
+  # without needing direct port access.
+  JenkinsInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: jenkins-puppet-windows-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Project
+          Value: jenkins-automation
+
+  JenkinsInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: jenkins-puppet-windows-profile
+      Roles:
+        - !Ref JenkinsInstanceRole
 
   # Key Pair - used to decrypt the initial Administrator RDP password
   JenkinsKeyPair:
@@ -78,6 +106,7 @@ Resources:
       InstanceType: !Ref InstanceType
       KeyName: !Ref JenkinsKeyPair
       ImageId: !Ref WindowsAMI
+      IamInstanceProfile: !Ref JenkinsInstanceProfile
       SecurityGroupIds:
         - !Ref JenkinsSecurityGroup
       BlockDeviceMappings:
@@ -136,6 +165,10 @@ Outputs:
   RDPConnection:
     Description: RDP connection target
     Value: !Sub ${JenkinsInstance.PublicIp}:3389
+
+  FleetManagerURL:
+    Description: AWS Systems Manager Fleet Manager URL for browser-based RDP
+    Value: !Sub https://${AWS::Region}.console.aws.amazon.com/systems-manager/fleet-manager/managed-nodes/${JenkinsInstance}
 
   InstallLog:
     Description: View installation log on the instance
