@@ -35,7 +35,7 @@ PUPPET_REPO_URL    = "https://apt.puppet.com/puppet-release-jammy.deb"
 PUPPET_REPO_DEB    = "/tmp/puppet-release.deb"
 PUPPET_BIN         = "/opt/puppetlabs/bin/puppet"
 PUPPET_MODULE      = "puppetlabs-apt"
-MANIFEST_URL       = "https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/manifests/jenkins.pp"
+MANIFEST_URL       = "https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/manifests/jenkins-linux.pp"
 MANIFEST_PATH      = "/tmp/jenkins.pp"
 
 # ─── LOGGING ──────────────────────────────────────────────────────────────────
