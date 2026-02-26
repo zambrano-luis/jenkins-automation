@@ -31,7 +31,7 @@ class jenkins {
   # If the key is already present it is skipped entirely.
   # ---------------------------------------------------------------------------
   apt::key { 'jenkins':
-    id     => 'FCEF32E745F2C3D5084B4C51B8C18D2E447CC5E3',
+    id     => '5E386EADB55F01504CAE8BCF7198F4B714ABFC68',
     source => 'https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key',
     server => 'keyserver.ubuntu.com',
   }
@@ -49,7 +49,7 @@ class jenkins {
     repos    => 'binary/',
     release  => ' ',
     key      => {
-      id     => 'FCEF32E745F2C3D5084B4C51B8C18D2E447CC5E3',
+      id     => '5E386EADB55F01504CAE8BCF7198F4B714ABFC68',
       source => 'https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key',
     },
     require  => Apt::Key['jenkins'],
