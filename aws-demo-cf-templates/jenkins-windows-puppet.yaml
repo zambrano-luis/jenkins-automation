@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Jenkins Automation - Track 1A Windows Demo (Windows Server 2022 + Puppet)
+  Provisions a t3.medium EC2 instance, bootstraps Puppet agent via PowerShell,
+  and applies the Jenkins manifest to configure Jenkins on port 8000.
+  Key pair is created by the stack for RDP password decryption.
+  Security group locked to deployer IP passed at deploy time.
+
+# --- PARAMETERS ---------------------------------------------------------------
+Parameters:
+
+  DeployerIP:
+    Type: String
+    Description: Your public IP in CIDR notation. Restricts RDP and Jenkins to this IP only.
+
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues:
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+    Description: EC2 instance type - t3.medium minimum for Windows Server + Jenkins
+
+  WindowsAMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-windows-latest/Windows_Server-2022-English-Full-Base
+    Description: Latest Windows Server 2022 AMI - resolved automatically via SSM at deploy time
+
+  ScriptURL:
+    Type: String
+    Default: https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/install_jenkins_puppet.ps1
+    Description: Raw GitHub URL to the Puppet bootstrap script
+
+# --- RESOURCES ----------------------------------------------------------------
+Resources:
+
+  # Key Pair - used to decrypt the initial Administrator RDP password
+  JenkinsKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: jenkins-puppet-windows-key
+      Tags:
+        - Key: Name
+          Value: jenkins-puppet-windows-key
+        - Key: Project
+          Value: jenkins-automation
+        - Key: Track
+          Value: Track1-Puppet
+
+  # Security Group
+  JenkinsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: jenkins-puppet-windows-sg
+      GroupDescription: Jenkins Puppet Windows demo - RDP and port 8000 restricted to deployer IP
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: !Ref DeployerIP
+          Description: RDP access - deployer IP only
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: !Ref DeployerIP
+          Description: Jenkins UI - deployer IP only
+      Tags:
+        - Key: Name
+          Value: jenkins-puppet-windows-sg
+        - Key: Project
+          Value: jenkins-automation
+
+  # EC2 Instance
+  JenkinsInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref JenkinsKeyPair
+      ImageId: !Ref WindowsAMI
+      SecurityGroupIds:
+        - !Ref JenkinsSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 50
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          <powershell>
+          $ErrorActionPreference = "Stop"
+          $logFile = "C:\jenkins-install.log"
+          Start-Transcript -Path $logFile -Append
+
+          Write-Host "==> Downloading Puppet bootstrap script from GitHub..."
+          Invoke-WebRequest -Uri "${ScriptURL}" -OutFile "C:\install_jenkins_puppet.ps1" -UseBasicParsing
+
+          Write-Host "==> Running Puppet bootstrap..."
+          powershell.exe -ExecutionPolicy Bypass -File "C:\install_jenkins_puppet.ps1"
+
+          Write-Host "==> Bootstrap complete. Jenkins is running on port 8000."
+          Stop-Transcript
+          </powershell>
+      Tags:
+        - Key: Name
+          Value: jenkins-puppet-windows-demo
+        - Key: Project
+          Value: jenkins-automation
+        - Key: Track
+          Value: Track1-Puppet
+
+# --- OUTPUTS ------------------------------------------------------------------
+Outputs:
+
+  InstanceID:
+    Description: EC2 Instance ID
+    Value: !Ref JenkinsInstance
+
+  PublicIP:
+    Description: Public IP address of the Jenkins instance
+    Value: !GetAtt JenkinsInstance.PublicIp
+
+  JenkinsURL:
+    Description: Jenkins URL - open in browser once provisioning completes (allow 5-10 min)
+    Value: !Sub http://${JenkinsInstance.PublicIp}:8000
+
+  KeyPairID:
+    Description: Key pair ID - used to decrypt the RDP Administrator password in the AWS Console
+    Value: !GetAtt JenkinsKeyPair.KeyPairId
+
+  KeyPairSSMPath:
+    Description: SSM path to retrieve private key for RDP password decryption
+    Value: !Sub /ec2/keypair/${JenkinsKeyPair.KeyPairId}
+
+  RDPConnection:
+    Description: RDP connection target
+    Value: !Sub ${JenkinsInstance.PublicIp}:3389
+
+  InstallLog:
+    Description: View installation log on the instance
+    Value: Get-Content C:\jenkins-install.log

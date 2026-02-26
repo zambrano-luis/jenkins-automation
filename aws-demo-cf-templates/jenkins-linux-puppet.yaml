@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Jenkins Automation - Track 1B Linux Demo (Ubuntu 22.04 LTS + Puppet)
+  Provisions a t3.medium EC2 instance, bootstraps Puppet agent via Python,
+  and applies the Jenkins manifest to configure Jenkins on port 8000.
+  Key pair is created by the stack and stored in SSM Parameter Store.
+  Security group locked to deployer IP passed at deploy time.
+
+# --- PARAMETERS ---------------------------------------------------------------
+Parameters:
+
+  DeployerIP:
+    Type: String
+    Description: Your public IP in CIDR notation. Restricts SSH and Jenkins to this IP only.
+
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues:
+      - t3.small
+      - t3.medium
+      - t3.large
+    Description: EC2 instance type - t3.medium recommended for stable Jenkins demo
+
+  UbuntuAMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
+    Description: Latest Ubuntu 22.04 LTS AMI - resolved automatically via SSM at deploy time
+
+  ScriptURL:
+    Type: String
+    Default: https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/install_jenkins_puppet.py
+    Description: Raw GitHub URL to the Puppet bootstrap script
+
+# --- RESOURCES ----------------------------------------------------------------
+Resources:
+
+  # Key Pair
+  JenkinsKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: jenkins-puppet-linux-key
+      Tags:
+        - Key: Name
+          Value: jenkins-puppet-linux-key
+        - Key: Project
+          Value: jenkins-automation
+        - Key: Track
+          Value: Track1-Puppet
+
+  # Security Group
+  JenkinsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: jenkins-puppet-linux-sg
+      GroupDescription: Jenkins Puppet Linux demo - SSH and port 8000 restricted to deployer IP
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref DeployerIP
+          Description: SSH access - deployer IP only
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: !Ref DeployerIP
+          Description: Jenkins UI - deployer IP only
+      Tags:
+        - Key: Name
+          Value: jenkins-puppet-linux-sg
+        - Key: Project
+          Value: jenkins-automation
+
+  # EC2 Instance
+  JenkinsInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref JenkinsKeyPair
+      ImageId: !Ref UbuntuAMI
+      SecurityGroupIds:
+        - !Ref JenkinsSecurityGroup
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          exec > >(tee /var/log/jenkins-install.log) 2>&1
+
+          echo "==> Downloading Puppet bootstrap script from GitHub..."
+          curl -fsSL -o /tmp/install_jenkins_puppet.py ${ScriptURL}
+
+          echo "==> Running Puppet bootstrap..."
+          python3 /tmp/install_jenkins_puppet.py
+
+          echo "==> Bootstrap complete. Jenkins is running on port 8000."
+      Tags:
+        - Key: Name
+          Value: jenkins-puppet-linux-demo
+        - Key: Project
+          Value: jenkins-automation
+        - Key: Track
+          Value: Track1-Puppet
+
+# --- OUTPUTS ------------------------------------------------------------------
+Outputs:
+
+  InstanceID:
+    Description: EC2 Instance ID
+    Value: !Ref JenkinsInstance
+
+  PublicIP:
+    Description: Public IP address of the Jenkins instance
+    Value: !GetAtt JenkinsInstance.PublicIp
+
+  JenkinsURL:
+    Description: Jenkins URL - open in browser once provisioning completes (allow 3-5 min)
+    Value: !Sub http://${JenkinsInstance.PublicIp}:8000
+
+  KeyPairID:
+    Description: Key pair ID - used to retrieve private key from SSM
+    Value: !GetAtt JenkinsKeyPair.KeyPairId
+
+  KeyPairSSMPath:
+    Description: SSM Parameter Store path containing the private key - retrieve once after deploy
+    Value: !Sub /ec2/keypair/${JenkinsKeyPair.KeyPairId}
+
+  SSHCommand:
+    Description: SSH command to connect - run after retrieving and fixing key permissions
+    Value: !Sub ssh -i jenkins-puppet-linux.pem ubuntu@${JenkinsInstance.PublicIp}
+
+  InstallLog:
+    Description: View installation log on the instance
+    Value: sudo cat /var/log/jenkins-install.log
