@@ -35,6 +35,7 @@ PUPPET_REPO_URL    = "https://apt.puppet.com/puppet-release-jammy.deb"
 PUPPET_REPO_DEB    = "/tmp/puppet-release.deb"
 PUPPET_BIN         = "/opt/puppetlabs/bin/puppet"
 PUPPET_MODULE      = "puppetlabs-apt"
+PUPPET_MODULE_VER  = "11.2.0"  # Compatible with Puppet 8
 MANIFEST_URL       = "https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/manifests/jenkins-linux.pp"
 MANIFEST_PATH      = "/tmp/jenkins.pp"
 
@@ -100,9 +101,9 @@ def is_package_installed(package):
     result = run(f"dpkg-query -W -f='${{Status}}' {package} 2>/dev/null", check=False)
     return "install ok installed" in result.stdout
 
-def puppet_module_installed(module):
+def puppet_module_installed(module, version):
     result = run(f"{PUPPET_BIN} module list 2>/dev/null | grep {module}", check=False)
-    return result.returncode == 0
+    return result.returncode == 0 and version in result.stdout
 
 # ─── BOOTSTRAP STEPS ──────────────────────────────────────────────────────────
 
@@ -115,16 +116,24 @@ def step_install_puppet():
     log_step("Step 1/4 — Installing Puppet agent")
 
     if os.path.isfile(PUPPET_BIN):
-        log_skip("Puppet agent already installed")
-        return
+        # Verify it is Puppet 8 — upgrade if not
+        version_result = run(f"{PUPPET_BIN} --version", check=False)
+        if version_result.stdout.strip().startswith("8."):
+            log_skip("Puppet 8 already installed")
+            return
+        else:
+            log_info(f"Puppet {version_result.stdout.strip()} detected — upgrading to Puppet 8...")
+            run("apt-get remove -y puppet-agent", check=False)
+            run("rm -rf /etc/puppetlabs/code/modules/apt", check=False)
+            run("rm -rf /etc/puppetlabs/code/modules/stdlib", check=False)
 
     log_info("Adding Puppet apt repository...")
     urllib.request.urlretrieve(PUPPET_REPO_URL, PUPPET_REPO_DEB)
     run(f"dpkg -i {PUPPET_REPO_DEB}")
     run("apt-get update -qq")
 
-    log_info("Installing puppet-agent (latest stable)...")
-    run("apt-get install -y -qq puppet-agent")
+    log_info("Installing puppet8 (Puppet 8 LTS)...")
+    run("apt-get install -y -qq puppet8")
     log_ok("Puppet agent installed")
 
     # Add Puppet binaries to PATH for this session
@@ -138,7 +147,7 @@ def step_install_module():
     """
     log_step("Step 2/4 — Installing puppetlabs-apt module")
 
-    if puppet_module_installed(PUPPET_MODULE):
+    if puppet_module_installed(PUPPET_MODULE, PUPPET_MODULE_VER):
         log_skip(f"{PUPPET_MODULE} already installed")
         return
 
