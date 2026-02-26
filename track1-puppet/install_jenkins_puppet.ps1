@@ -1,7 +1,7 @@
 # =============================================================================
 # Jenkins Automation - Track 1A: PowerShell + Puppet (Windows Bootstrap)
 # =============================================================================
-# Bootstraps Puppet agent on Windows Server 2022, installs the puppetlabs-apt
+# Bootstraps Puppet agent on Windows Server 2022, installs the puppetlabs-registry
 # module, downloads the Jenkins manifest from GitHub, and runs puppet apply.
 #
 # Puppet then takes over and declares the desired state for:
@@ -29,8 +29,8 @@ $PuppetVersionUrl  = "https://downloads.puppet.com/puppet-agent/latest.json"
 $PuppetInstallDir  = "C:\Program Files\Puppet Labs\Puppet\bin"
 $PuppetBin         = "C:\Program Files\Puppet Labs\Puppet\bin\puppet.bat"
 $PuppetModulePath  = "C:\ProgramData\PuppetLabs\puppet\etc\modules"
-$PuppetModule      = "puppetlabs-apt"
-$ManifestUrl       = "https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/manifests/jenkins.pp"
+$PuppetModule      = "puppetlabs-registry"
+$ManifestUrl       = "https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/manifests/jenkins-windows.pp"
 $ManifestPath      = "$env:TEMP\jenkins.pp"
 $MsiPath           = "$env:TEMP\puppet-agent.msi"
 
@@ -116,7 +116,7 @@ function Step-InstallPuppet {
     Write-Ok "Puppet agent $version installed"
 }
 
-# --- STEP 2: Install puppetlabs-apt module ------------------------------------
+# --- STEP 2: Install puppetlabs-registry module ------------------------------------
 function Step-InstallModule {
     Write-Step "Step 2/4 - Installing $PuppetModule module"
 
