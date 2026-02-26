@@ -44,20 +44,16 @@ class jenkins_windows {
   # ---------------------------------------------------------------------------
   # STEP 2 — Download Jenkins MSI (latest LTS)
   # ---------------------------------------------------------------------------
-  # Queries the Jenkins update center for the current LTS version number,
-  # constructs the MSI download URL dynamically, and downloads it.
+  # Downloads Jenkins LTS MSI directly. Version is pinned here for stability.
+  # Update $jenkins_version to upgrade Jenkins.
   # Idempotent: only downloads if the MSI file does not already exist.
   # ---------------------------------------------------------------------------
-  $jenkins_msi = 'C:\Windows\Temp\jenkins.msi'
+  $jenkins_msi     = 'C:\Windows\Temp\jenkins.msi'
+  $jenkins_version = '2.541.2'
+  $jenkins_url     = "https://get.jenkins.io/windows-stable/${jenkins_version}/jenkins.msi"
 
   exec { 'download-jenkins':
-    command  => @("POWERSHELL")
-      $json    = Invoke-RestMethod -Uri 'https://updates.jenkins.io/stable/update-center.actual.json' -UseBasicParsing
-      $version = $json.core.version
-      $url     = "https://get.jenkins.io/windows-stable/$version/jenkins.msi"
-      Invoke-WebRequest -Uri $url -OutFile '${jenkins_msi}' -UseBasicParsing
-      | POWERSHELL
-    ,
+    command  => "Invoke-WebRequest -Uri '${jenkins_url}' -OutFile '${jenkins_msi}' -UseBasicParsing",
     provider => powershell,
     creates  => $jenkins_msi,
     require  => Exec['install-java'],
