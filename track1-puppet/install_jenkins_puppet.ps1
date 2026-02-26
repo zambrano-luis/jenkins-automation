@@ -116,8 +116,16 @@ def step_install_puppet():
     log_step("Step 1/4 — Installing Puppet agent")
 
     if os.path.isfile(PUPPET_BIN):
-        log_skip("Puppet agent already installed")
-        return
+        # Verify it is Puppet 8 — upgrade if not
+        version_result = run(f"{PUPPET_BIN} --version", check=False)
+        if version_result.stdout.strip().startswith("8."):
+            log_skip("Puppet 8 already installed")
+            return
+        else:
+            log_info(f"Puppet {version_result.stdout.strip()} detected — upgrading to Puppet 8...")
+            run("apt-get remove -y puppet-agent", check=False)
+            run("rm -rf /etc/puppetlabs/code/modules/apt", check=False)
+            run("rm -rf /etc/puppetlabs/code/modules/stdlib", check=False)
 
     log_info("Adding Puppet apt repository...")
     urllib.request.urlretrieve(PUPPET_REPO_URL, PUPPET_REPO_DEB)
