@@ -45,11 +45,28 @@ function Write-Header {
     Write-Host ""
 }
 
-function Write-Step { param($msg) Write-Host "`n==> $msg" -ForegroundColor Yellow }
-function Write-Info { param($msg) Write-Host "    ->  $msg" -ForegroundColor Gray }
-function Write-Skip { param($msg) Write-Host "    SKIP: $msg - already done" -ForegroundColor Cyan }
-function Write-Ok   { param($msg) Write-Host "    OK  $msg" -ForegroundColor Green }
+function Write-Step { param($msg) Write-Host "`n==> [$(Get-Date -Format 'HH:mm:ss')] $msg" -ForegroundColor Yellow }
+function Write-Info { param($msg) Write-Host "    [$(Get-Date -Format 'HH:mm:ss')] ->  $msg" -ForegroundColor Gray }
+function Write-Skip { param($msg) Write-Host "    [$(Get-Date -Format 'HH:mm:ss')] SKIP: $msg - already done" -ForegroundColor Cyan }
+function Write-Ok   { param($msg) Write-Host "    [$(Get-Date -Format 'HH:mm:ss')] OK  $msg" -ForegroundColor Green }
 function Write-Fail { param($msg) Write-Host "`nERROR: $msg" -ForegroundColor Red; exit 1 }
+
+function Download-File {
+    param($Url, $OutFile, $Label)
+    Write-Info "Downloading $Label..."
+    Write-Info "URL: $Url"
+    Write-Info "Destination: $OutFile"
+    $start = Get-Date
+    try {
+        Start-BitsTransfer -Source $Url -Destination $OutFile -DisplayName $Label -Description "Downloading..."
+    } catch {
+        Write-Info "BITS transfer failed, falling back to Invoke-WebRequest..."
+        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -Verbose
+    }
+    $elapsed = ((Get-Date) - $start).TotalSeconds
+    $size = [math]::Round((Get-Item $OutFile).Length / 1MB, 1)
+    Write-Ok "Downloaded $Label - ${size}MB in ${elapsed}s"
+}
 
 function Write-Summary {
     Write-Host ""
@@ -96,16 +113,12 @@ function Step-InstallPuppet {
 
     $msiUrl = "https://downloads.puppet.com/windows/puppet-agent-$version-x64.msi"
     Write-Info "Latest version: $version"
-    Write-Info "Downloading from: $msiUrl"
+    Download-File -Url $msiUrl -OutFile $MsiPath -Label "Puppet agent $version MSI"
 
-    try {
-        Invoke-WebRequest -Uri $msiUrl -OutFile $MsiPath -UseBasicParsing
-    } catch {
-        Write-Fail "Failed to download Puppet MSI: $_"
-    }
-
-    Write-Info "Installing Puppet agent silently..."
-    $install = Start-Process msiexec.exe -ArgumentList "/i `"$MsiPath`" /qn /norestart" -Wait -PassThru
+    Write-Info "Installing Puppet agent silently (this takes 1-2 minutes)..."
+    Write-Info "MSI log: $env:TEMP\puppet-install.log"
+    $install = Start-Process msiexec.exe -ArgumentList "/i `"$MsiPath`" /qn /norestart /L*v `"$env:TEMP\puppet-install.log`"" -Wait -PassThru
+    Write-Info "MSI exit code: $($install.ExitCode)"
     if ($install.ExitCode -notin @(0, 3010)) {
         Write-Fail "Puppet MSI installation failed with exit code $($install.ExitCode)"
     }
@@ -139,12 +152,7 @@ function Step-InstallModule {
 function Step-DownloadManifest {
     Write-Step "Step 3/4 - Downloading Jenkins manifest"
 
-    Write-Info "Fetching manifest from GitHub..."
-    try {
-        Invoke-WebRequest -Uri $ManifestUrl -OutFile $ManifestPath -UseBasicParsing
-    } catch {
-        Write-Fail "Failed to download manifest from $ManifestUrl - $_"
-    }
+    Download-File -Url $ManifestUrl -OutFile $ManifestPath -Label "Jenkins Puppet manifest"
 
     Write-Ok "Manifest saved to $ManifestPath"
 }
