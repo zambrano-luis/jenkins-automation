@@ -1,4 +1,8 @@
 # Local deploy scripts with personal config (profiles, regions, etc.)
+track1-puppet/deploy-track1-linux-local.ps1
+track1-puppet/deploy-track1-windows-local.ps1
+track1-puppet/cleanup-track1-linux-local.ps1
+track1-puppet/cleanup-track1-windows-local.ps1
 track2-python/deploy-track2-linux-local.ps1
 track2-python/deploy-track2-windows-local.ps1
 track2-python/cleanup-track2-linux-local.ps1
@@ -6,3 +10,6 @@ track2-python/cleanup-track2-windows-local.ps1
 
 # Private keys - never commit
 *.pem
+jenkins-demo.pem
+jenkins-puppet-linux.pem
+jenkins-puppet-windows.pem

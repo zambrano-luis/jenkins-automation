@@ -18,10 +18,10 @@ function Write-Info { param($msg) Write-Host "    ->  $msg" -ForegroundColor Gra
 
 # --- STEP 0: Validate AWS SSO session -----------------------------------------
 Write-Step "Step 0/6 - Validating AWS SSO session..."
-$identity = awsprod sts get-caller-identity --output json 2>&1
+$identity = aws sts get-caller-identity --output json 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: AWS SSO session is not active or has expired." -ForegroundColor Red
-    Write-Host "Run: awsprod sso login" -ForegroundColor Yellow
+    Write-Host "Run: aws sso login" -ForegroundColor Yellow
     exit 1
 }
 $Account = ($identity | ConvertFrom-Json).Account
@@ -42,7 +42,7 @@ Write-Info "Stack:    $StackName"
 Write-Info "Region:   $Region"
 Write-Info "Template: $Template"
 
-awsprod cloudformation deploy `
+aws cloudformation deploy `
     --template-file $Template `
     --stack-name $StackName `
     --region $Region `
@@ -53,7 +53,7 @@ Write-Ok "Stack deployed"
 
 # --- STEP 3: Get outputs ------------------------------------------------------
 Write-Step "Step 3/6 - Retrieving stack outputs..."
-$Outputs = awsprod cloudformation describe-stacks `
+$Outputs = aws cloudformation describe-stacks `
     --stack-name $StackName `
     --region $Region `
     --query "Stacks[0].Outputs" `
@@ -76,7 +76,7 @@ if (Test-Path .\jenkins-puppet-linux.pem) {
     icacls .\jenkins-puppet-linux.pem /grant "$($env:USERNAME):(F)" | Out-Null
     Remove-Item .\jenkins-puppet-linux.pem -Force
 }
-awsprod ssm get-parameter `
+aws ssm get-parameter `
     --name $KeyPairSSMPath `
     --with-decryption `
     --region $Region `
