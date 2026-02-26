@@ -47,6 +47,7 @@ aws cloudformation deploy `
     --stack-name $StackName `
     --region $Region `
     --parameter-overrides DeployerIP="$MY_IP/32"
+    --capabilities CAPABILITY_NAMED_IAM
 
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Stack deploy failed." -ForegroundColor Red; exit 1 }
 Write-Ok "Stack deployed"
