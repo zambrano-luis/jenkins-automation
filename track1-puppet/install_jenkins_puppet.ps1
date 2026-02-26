@@ -1,230 +1,178 @@
-#!/usr/bin/env python3
-"""
-Jenkins Automation — Track 1B: Python + Puppet (Linux Bootstrap)
-=================================================================
-Bootstraps Puppet agent on Ubuntu 22.04 LTS, installs the puppetlabs-apt
-module, downloads the Jenkins manifest from GitHub, and runs puppet apply.
+# =============================================================================
+# Jenkins Automation - Track 1A: PowerShell + Puppet (Windows Bootstrap)
+# =============================================================================
+# Bootstraps Puppet agent on Windows Server 2022, installs the puppetlabs-apt
+# module, downloads the Jenkins manifest from GitHub, and runs puppet apply.
+#
+# Puppet then takes over and declares the desired state for:
+#   - Jenkins package and prerequisites
+#   - Port 8000 configuration
+#   - Setup wizard disabled
+#   - Jenkins service running and enabled
+#
+# Requirements satisfied:
+#   A) Runs on a clean OS - all dependencies installed from scratch
+#   B) Fully unattended - no prompts at any stage
+#   C) Jenkins listens on port 8000 natively
+#   D) Idempotent - puppet apply converges to desired state on every run
+#
+# Usage:
+#   powershell.exe -ExecutionPolicy Bypass -File install_jenkins_puppet.ps1
+#
+# Author: Luis Zambrano
+# =============================================================================
 
-Puppet then takes over and declares the desired state for:
-  - Jenkins GPG key and apt repository
-  - Java 17 and Jenkins packages
-  - Port 8000 configuration via systemd override
-  - Setup wizard disabled
-  - Jenkins service running and enabled
+$ErrorActionPreference = "Stop"
 
-Requirements satisfied:
-  A) Runs on a clean OS — puppet-agent and module installed from scratch
-  B) Fully unattended — no prompts at any stage
-  C) Jenkins listens on port 8000 natively via systemd override
-  D) Idempotent — puppet apply converges to desired state on every run
+# --- CONSTANTS ----------------------------------------------------------------
+$PuppetVersionUrl  = "https://downloads.puppet.com/puppet-agent/latest.json"
+$PuppetInstallDir  = "C:\Program Files\Puppet Labs\Puppet\bin"
+$PuppetBin         = "C:\Program Files\Puppet Labs\Puppet\bin\puppet.bat"
+$PuppetModulePath  = "C:\ProgramData\PuppetLabs\puppet\etc\modules"
+$PuppetModule      = "puppetlabs-apt"
+$ManifestUrl       = "https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/manifests/jenkins.pp"
+$ManifestPath      = "$env:TEMP\jenkins.pp"
+$MsiPath           = "$env:TEMP\puppet-agent.msi"
 
-Usage:
-  sudo python3 install_jenkins_puppet.py
+# --- LOGGING ------------------------------------------------------------------
+function Write-Header {
+    Write-Host ""
+    Write-Host "╔══════════════════════════════════════════════════╗" -ForegroundColor Yellow
+    Write-Host "║  Jenkins Automation - Track 1A: Puppet Windows  ║" -ForegroundColor Yellow
+    Write-Host "║  Target: Windows Server 2022                    ║" -ForegroundColor Yellow
+    Write-Host "║  Port:   8000                                   ║" -ForegroundColor Yellow
+    Write-Host "╚══════════════════════════════════════════════════╝" -ForegroundColor Yellow
+    Write-Host ""
+}
 
-Author: Luis Zambrano
-"""
+function Write-Step { param($msg) Write-Host "`n==> $msg" -ForegroundColor Yellow }
+function Write-Info { param($msg) Write-Host "    ->  $msg" -ForegroundColor Gray }
+function Write-Skip { param($msg) Write-Host "    SKIP: $msg - already done" -ForegroundColor Cyan }
+function Write-Ok   { param($msg) Write-Host "    OK  $msg" -ForegroundColor Green }
+function Write-Fail { param($msg) Write-Host "`nERROR: $msg" -ForegroundColor Red; exit 1 }
 
-import os
-import sys
-import subprocess
-import urllib.request
+function Write-Summary {
+    Write-Host ""
+    Write-Host "╔══════════════════════════════════════════════════╗" -ForegroundColor Green
+    Write-Host "║             Installation Complete                ║" -ForegroundColor Green
+    Write-Host "╠══════════════════════════════════════════════════╣" -ForegroundColor Green
+    Write-Host "║  Jenkins is running on port 8000                 ║" -ForegroundColor Green
+    Write-Host "║                                                  ║" -ForegroundColor Green
+    Write-Host "║  Access:  http://<your-ip>:8000              ║" -ForegroundColor Green
+    Write-Host "║  Logs:    Get-EventLog -LogName Application      ║" -ForegroundColor Green
+    Write-Host "║  Puppet:  puppet apply manifests\jenkins.pp      ║" -ForegroundColor Green
+    Write-Host "╚══════════════════════════════════════════════════╝" -ForegroundColor Green
+    Write-Host ""
+}
 
-# ─── CONSTANTS ────────────────────────────────────────────────────────────────
+# --- HELPERS ------------------------------------------------------------------
+function Ensure-Admin {
+    $current = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    if (-not $current.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Write-Fail "This script must be run as Administrator."
+    }
+}
 
-PUPPET_REPO_URL    = "https://apt.puppet.com/puppet8-release-jammy.deb"
-PUPPET_REPO_DEB    = "/tmp/puppet-release.deb"
-PUPPET_BIN         = "/opt/puppetlabs/bin/puppet"
-PUPPET_MODULE      = "puppetlabs-apt"
-PUPPET_MODULE_VER  = "11.2.0"  # Compatible with Puppet 8
-MANIFEST_URL       = "https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/manifests/jenkins-linux.pp"
-MANIFEST_PATH      = "/tmp/jenkins.pp"
+function Is-PuppetInstalled {
+    return Test-Path $PuppetBin
+}
 
-# ─── LOGGING ──────────────────────────────────────────────────────────────────
+# --- STEP 1: Install Puppet Agent ---------------------------------------------
+function Step-InstallPuppet {
+    Write-Step "Step 1/4 - Installing Puppet agent"
 
-class Color:
-    RESET  = "\033[0m"
-    BOLD   = "\033[1m"
-    AMBER  = "\033[33m"
-    GREEN  = "\033[32m"
-    RED    = "\033[31m"
-    CYAN   = "\033[36m"
-    MUTED  = "\033[90m"
-
-def log_step(msg):
-    print(f"\n{Color.BOLD}{Color.AMBER}==>{Color.RESET} {Color.BOLD}{msg}{Color.RESET}")
-
-def log_info(msg):
-    print(f"    {Color.MUTED}→{Color.RESET}  {msg}")
-
-def log_skip(msg):
-    print(f"    {Color.CYAN}↷  SKIP:{Color.RESET} {msg} — already done")
-
-def log_ok(msg):
-    print(f"    {Color.GREEN}✓  {msg}{Color.RESET}")
-
-def log_error(msg):
-    print(f"\n{Color.RED}{Color.BOLD}✗  ERROR: {msg}{Color.RESET}\n", file=sys.stderr)
-
-def log_header():
-    print(f"""
-{Color.BOLD}{Color.AMBER}╔══════════════════════════════════════════════════╗
-║   Jenkins Automation — Track 1B: Puppet Linux   ║
-║   Target: Ubuntu 22.04 LTS                      ║
-║   Port:   8000                                   ║
-╚══════════════════════════════════════════════════╝{Color.RESET}
-""")
-
-# ─── HELPERS ──────────────────────────────────────────────────────────────────
-
-def run(cmd, check=True):
-    """Run a shell command, stream output, raise on failure."""
-    env = os.environ.copy()
-    env["DEBIAN_FRONTEND"] = "noninteractive"
-    result = subprocess.run(
-        cmd, shell=True, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-    )
-    if result.stdout.strip():
-        for line in result.stdout.strip().splitlines():
-            log_info(line)
-    if check and result.returncode != 0:
-        log_error(f"Command failed (exit {result.returncode}): {cmd}")
-        sys.exit(result.returncode)
-    return result
-
-def ensure_root():
-    if os.geteuid() != 0:
-        log_error("This script must be run as root. Use: sudo python3 install_jenkins_puppet.py")
-        sys.exit(1)
-
-def is_package_installed(package):
-    result = run(f"dpkg-query -W -f='${{Status}}' {package} 2>/dev/null", check=False)
-    return "install ok installed" in result.stdout
-
-def puppet_module_installed(module, version):
-    result = run(f"{PUPPET_BIN} module list 2>/dev/null | grep {module}", check=False)
-    return result.returncode == 0 and version in result.stdout
-
-# ─── BOOTSTRAP STEPS ──────────────────────────────────────────────────────────
-
-def step_install_puppet():
-    """
-    Step 1 — Install Puppet agent from Puppet's official apt repo.
-    Uses puppet-agent (latest stable) rather than a versioned package.
-    Idempotent: skips if puppet-agent is already installed.
-    """
-    log_step("Step 1/4 — Installing Puppet agent")
-
-    if os.path.isfile(PUPPET_BIN):
-        # Verify it is Puppet 8 — upgrade if not
-        version_result = run(f"{PUPPET_BIN} --version", check=False)
-        if version_result.stdout.strip().startswith("8."):
-            log_skip("Puppet 8 already installed")
-            return
-        else:
-            log_info(f"Puppet {version_result.stdout.strip()} detected — upgrading to Puppet 8...")
-            run("apt-get remove -y puppet-agent", check=False)
-            run("rm -rf /etc/puppetlabs/code/modules/apt", check=False)
-            run("rm -rf /etc/puppetlabs/code/modules/stdlib", check=False)
-
-    log_info("Adding Puppet apt repository...")
-    urllib.request.urlretrieve(PUPPET_REPO_URL, PUPPET_REPO_DEB)
-    run(f"dpkg -i {PUPPET_REPO_DEB}")
-    run("apt-get update -qq")
-
-    log_info("Installing puppet-agent from Puppet 8 repo...")
-    run("apt-get install -y -qq puppet-agent")
-    log_ok("Puppet agent installed")
-
-    # Add Puppet binaries to PATH for this session
-    os.environ["PATH"] = f"/opt/puppetlabs/bin:{os.environ['PATH']}"
-
-
-def step_install_module():
-    """
-    Step 2 — Install puppetlabs-apt module required by the manifest.
-    Idempotent: skips if module is already installed.
-    """
-    log_step("Step 2/4 — Installing puppetlabs-apt module")
-
-    if puppet_module_installed(PUPPET_MODULE, PUPPET_MODULE_VER):
-        log_skip(f"{PUPPET_MODULE} already installed")
+    if (Is-PuppetInstalled) {
+        Write-Skip "Puppet agent already installed"
         return
+    }
 
-    log_info(f"Installing {PUPPET_MODULE}...")
-    run(f"{PUPPET_BIN} module install {PUPPET_MODULE} --target-dir /etc/puppetlabs/code/modules")
-    log_ok(f"{PUPPET_MODULE} installed")
+    Write-Info "Fetching latest Puppet agent version from Puppet API..."
+    try {
+        $response = Invoke-RestMethod -Uri $PuppetVersionUrl -UseBasicParsing
+        $version  = $response.version
+    } catch {
+        Write-Fail "Failed to fetch latest Puppet version from $PuppetVersionUrl - $_"
+    }
 
+    $msiUrl = "https://downloads.puppet.com/windows/puppet-agent-$version-x64.msi"
+    Write-Info "Latest version: $version"
+    Write-Info "Downloading from: $msiUrl"
 
-def step_download_manifest():
-    """
-    Step 3 — Download the Jenkins Puppet manifest from GitHub.
-    Always downloads fresh to ensure latest version is applied.
-    """
-    log_step("Step 3/4 — Downloading Jenkins manifest")
+    try {
+        Invoke-WebRequest -Uri $msiUrl -OutFile $MsiPath -UseBasicParsing
+    } catch {
+        Write-Fail "Failed to download Puppet MSI: $_"
+    }
 
-    log_info(f"Fetching manifest from GitHub...")
-    urllib.request.urlretrieve(MANIFEST_URL, MANIFEST_PATH)
-    log_ok(f"Manifest saved to {MANIFEST_PATH}")
+    Write-Info "Installing Puppet agent silently..."
+    $install = Start-Process msiexec.exe -ArgumentList "/i `"$MsiPath`" /qn /norestart" -Wait -PassThru
+    if ($install.ExitCode -notin @(0, 3010)) {
+        Write-Fail "Puppet MSI installation failed with exit code $($install.ExitCode)"
+    }
 
+    # Add Puppet to PATH for this session
+    $env:PATH = "$PuppetInstallDir;$env:PATH"
 
-def step_puppet_apply():
-    """
-    Step 4 — Run puppet apply against the Jenkins manifest.
-    Puppet handles all idempotency from this point forward.
-    On re-run Puppet converges to desired state — skipping resources
-    already in the correct state and only acting where drift is detected.
-    """
-    log_step("Step 4/4 — Applying Puppet manifest")
+    Write-Ok "Puppet agent $version installed"
+}
 
-    log_info("Running puppet apply (this may take a few minutes)...")
-    result = run(
-        f"{PUPPET_BIN} apply {MANIFEST_PATH} "
-        f"--modulepath /etc/puppetlabs/code/modules",
-        check=False
-    )
+# --- STEP 2: Install puppetlabs-apt module ------------------------------------
+function Step-InstallModule {
+    Write-Step "Step 2/4 - Installing $PuppetModule module"
 
+    $moduleCheck = & "$PuppetBin" module list 2>&1 | Select-String $PuppetModule
+    if ($moduleCheck) {
+        Write-Skip "$PuppetModule already installed"
+        return
+    }
+
+    Write-Info "Installing $PuppetModule..."
+    & "$PuppetBin" module install $PuppetModule --target-dir $PuppetModulePath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "Failed to install $PuppetModule module"
+    }
+
+    Write-Ok "$PuppetModule installed"
+}
+
+# --- STEP 3: Download manifest ------------------------------------------------
+function Step-DownloadManifest {
+    Write-Step "Step 3/4 - Downloading Jenkins manifest"
+
+    Write-Info "Fetching manifest from GitHub..."
+    try {
+        Invoke-WebRequest -Uri $ManifestUrl -OutFile $ManifestPath -UseBasicParsing
+    } catch {
+        Write-Fail "Failed to download manifest from $ManifestUrl - $_"
+    }
+
+    Write-Ok "Manifest saved to $ManifestPath"
+}
+
+# --- STEP 4: Run puppet apply -------------------------------------------------
+function Step-PuppetApply {
+    Write-Step "Step 4/4 - Applying Puppet manifest"
+
+    Write-Info "Running puppet apply (this may take a few minutes)..."
+    & "$PuppetBin" apply $ManifestPath --modulepath $PuppetModulePath
+    
     # Puppet exit codes:
     # 0 = success, no changes
     # 2 = success, changes were made
     # 4 = failures
     # 6 = changes and failures
-    if result.returncode in (0, 2):
-        log_ok("Puppet apply completed successfully")
-    else:
-        log_error(f"Puppet apply failed with exit code {result.returncode}")
-        sys.exit(result.returncode)
+    if ($LASTEXITCODE -notin @(0, 2)) {
+        Write-Fail "Puppet apply failed with exit code $LASTEXITCODE"
+    }
 
+    Write-Ok "Puppet apply completed successfully"
+}
 
-# ─── SUMMARY ──────────────────────────────────────────────────────────────────
-
-def log_summary():
-    print(f"""
-{Color.BOLD}{Color.GREEN}╔══════════════════════════════════════════════════╗
-║              Installation Complete               ║
-╠══════════════════════════════════════════════════╣
-║  Jenkins is running on port 8000                  ║
-║                                                  ║
-║  Access:  http://<your-ip>:8000              ║
-║  Logs:    journalctl -u jenkins -f               ║
-║  Puppet:  puppet apply manifests/jenkins.pp      ║
-╚══════════════════════════════════════════════════╝{Color.RESET}
-""")
-
-
-# ─── MAIN ─────────────────────────────────────────────────────────────────────
-
-def main():
-    log_header()
-    ensure_root()
-
-    step_install_puppet()
-    step_install_module()
-    step_download_manifest()
-    step_puppet_apply()
-
-    log_summary()
-
-
-if __name__ == "__main__":
-    main()
+# --- MAIN ---------------------------------------------------------------------
+Write-Header
+Ensure-Admin
+Step-InstallPuppet
+Step-InstallModule
+Step-DownloadManifest
+Step-PuppetApply
+Write-Summary

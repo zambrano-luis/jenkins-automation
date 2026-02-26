@@ -31,7 +31,7 @@ import urllib.request
 
 # ─── CONSTANTS ────────────────────────────────────────────────────────────────
 
-PUPPET_REPO_URL    = "https://apt.puppet.com/puppet-release-jammy.deb"
+PUPPET_REPO_URL    = "https://apt.puppet.com/puppet8-release-jammy.deb"
 PUPPET_REPO_DEB    = "/tmp/puppet-release.deb"
 PUPPET_BIN         = "/opt/puppetlabs/bin/puppet"
 PUPPET_MODULE      = "puppetlabs-apt"
@@ -132,8 +132,8 @@ def step_install_puppet():
     run(f"dpkg -i {PUPPET_REPO_DEB}")
     run("apt-get update -qq")
 
-    log_info("Installing puppet8 (Puppet 8 LTS)...")
-    run("apt-get install -y -qq puppet8")
+    log_info("Installing puppet-agent from Puppet 8 repo...")
+    run("apt-get install -y -qq puppet-agent")
     log_ok("Puppet agent installed")
 
     # Add Puppet binaries to PATH for this session
