@@ -28,6 +28,7 @@ class jenkins {
   apt::key { 'jenkins':
     id     => 'FCEF32E745F2C3D5084B4C51B8C18D2E447CC5E3',
     source => 'https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key',
+    server => 'keyserver.ubuntu.com',
   }
 
   # ---------------------------------------------------------------------------
