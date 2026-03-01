@@ -19,8 +19,8 @@ dsc { 'install_java':
   resource_name => 'Script',
   module        => 'PSDesiredStateConfiguration',
   properties    => {
-    getscript  => 'return @{ Result = (Test-Path "HKLM:\\SOFTWARE\\Eclipse Adoptium\\JDK\\17").ToString() }',
-    testscript => 'return (Test-Path "HKLM:\\SOFTWARE\\Eclipse Adoptium\\JDK\\17")',
+    getscript  => 'return @{ Result = ((Get-Command java -ErrorAction SilentlyContinue) -ne $null).ToString() }',
+    testscript => 'return ((Get-Command java -ErrorAction SilentlyContinue) -ne $null)',
     setscript  => '$r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\java17.msi","/qn","/norestart") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Java MSI failed: $($r.ExitCode)" }',
   },
   require => Dsc['download_java'],
@@ -33,7 +33,7 @@ dsc { 'download_jenkins':
   properties    => {
     getscript  => 'return @{ Result = (Test-Path "C:\\Windows\\Temp\\jenkins.msi").ToString() }',
     testscript => 'return (Test-Path "C:\\Windows\\Temp\\jenkins.msi")',
-    setscript  => '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri "https://get.jenkins.io/windows/latest" -OutFile "C:\\Windows\\Temp\\jenkins.msi" -UseBasicParsing -MaximumRedirection 5; if ((Get-Item "C:\\Windows\\Temp\\jenkins.msi").Length -lt 1MB) { throw "Jenkins MSI corrupt" }',
+    setscript  => '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile("https://get.jenkins.io/windows-stable/2.528.2/jenkins.msi","C:\\Windows\\Temp\\jenkins.msi"); if ((Get-Item "C:\\Windows\\Temp\\jenkins.msi").Length -lt 1MB) { throw "Jenkins MSI corrupt" }',
   },
   require => Dsc['install_java'],
 }
