@@ -19,8 +19,8 @@ dsc { 'install_java':
   resource_name => 'Script',
   module        => 'PSDesiredStateConfiguration',
   properties    => {
-    getscript  => 'return @{ Result = ((Get-Command java -ErrorAction SilentlyContinue) -ne $null).ToString() }',
-    testscript => 'return ((Get-Command java -ErrorAction SilentlyContinue) -ne $null)',
+    getscript  => 'return @{ Result = (Test-Path "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.11.9-hotspot\\bin\\java.exe").ToString() }',
+    testscript => 'return (Test-Path "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.11.9-hotspot\\bin\\java.exe")',
     setscript  => '$r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\java17.msi","/qn","/norestart") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Java MSI failed: $($r.ExitCode)" }',
   },
   require => Dsc['download_java'],
@@ -45,7 +45,7 @@ dsc { 'install_jenkins':
   properties    => {
     getscript  => 'return @{ Result = ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null).ToString() }',
     testscript => 'return ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null)',
-    setscript  => '$r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\jenkins.msi","/qn","/norestart") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Jenkins MSI failed: $($r.ExitCode)" }',
+    setscript  => '$javaPath = "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.11.9-hotspot\\bin"; $syspath = [Environment]::GetEnvironmentVariable("Path","Machine"); if ($syspath -notlike "*Adoptium*") { [Environment]::SetEnvironmentVariable("Path","$syspath;$javaPath","Machine") }; $env:Path = "$env:Path;$javaPath"; $r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\jenkins.msi","/qn","/norestart","PORT=8000","JENKINSDIR=C:\\Program Files\\Jenkins") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Jenkins MSI failed: $($r.ExitCode)" }',
   },
   require => Dsc['download_jenkins'],
 }
@@ -61,14 +61,14 @@ dsc { 'jenkins_stopped_for_config':
   require => Dsc['install_jenkins'],
 }
 
-# RESOURCE 6 - Configure jenkins.xml (port 8000 + disable wizard)
+# RESOURCE 6 - Disable setup wizard in jenkins.xml
 dsc { 'configure_jenkins_xml':
   resource_name => 'Script',
   module        => 'PSDesiredStateConfiguration',
   properties    => {
-    getscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return @{ Result = (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false")).ToString() }',
-    testscript => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false"))',
-    setscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; $xml = $xml -replace "--httpPort=\\d+","--httpPort=8000"; if ($xml -notmatch "runSetupWizard=false") { $xml = $xml -replace "(<arguments>[^<]+)(</arguments>)","$1 -Djenkins.install.runSetupWizard=false`$2" }; Set-Content -Path "C:\\Program Files\\Jenkins\\jenkins.xml" -Value $xml -Encoding UTF8',
+    getscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return @{ Result = ($xml -match "runSetupWizard=false").ToString() }',
+    testscript => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return ($xml -match "runSetupWizard=false")',
+    setscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; if ($xml -notmatch "runSetupWizard=false") { $xml = $xml -replace "(<arguments>[^<]+)(</arguments>)","$1 -Djenkins.install.runSetupWizard=false`$2" }; Set-Content -Path "C:\\Program Files\\Jenkins\\jenkins.xml" -Value $xml -Encoding UTF8',
   },
   require => Dsc['jenkins_stopped_for_config'],
 }
