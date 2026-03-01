@@ -1,112 +1,190 @@
 # =============================================================================
-# Jenkins Automation — Track 1A: Puppet Manifest (Windows)
-# =============================================================================
-# Declares the desired state for a Jenkins CI server on Windows Server 2022.
-# Applied via: puppet apply manifests\jenkins-windows.pp
+# jenkins-windows.pp
+# Track 1A - Jenkins on Windows Server 2022 via Puppet + DSC Lite
+#
+# Uses puppetlabs-dsc_lite to delegate all Windows-native operations
+# to DSC resources. No exec blocks. All resources carry proper
+# Test/Set/Get blocks for native idempotency.
 #
 # Requirements satisfied:
-#   A) Runs on a clean OS — all dependencies declared and managed by Puppet
-#   B) Fully unattended — no prompts, no wizard, silent MSI install
-#   C) Jenkins listens on port 8000 natively via MSI PORT parameter
-#   D) Idempotent — Puppet converges to desired state on every run
-#
-# External modules required:
-#   puppetlabs-registry — manages Windows registry values
-#
-# Author: Luis Zambrano
+#   Req A - Unattended clean install
+#   Req B - No manual intervention (wizard disabled)
+#   Req C - Jenkins binds to port 8000
+#   Req D - Idempotent (DSC test blocks check current state before acting)
 # =============================================================================
 
-class jenkins_windows {
+# --- Variables ---------------------------------------------------------------
+$java_url     = 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.11%2B9/OpenJDK17U-jdk_x64_windows_hotspot_17.0.11_9.msi'
+$java_msi     = 'C:\Windows\Temp\java17.msi'
+$java_reg_key = 'HKLM:\SOFTWARE\Eclipse Adoptium\JDK\17'
 
-  # ---------------------------------------------------------------------------
-  # STEP 1 — Install Java 17
-  # ---------------------------------------------------------------------------
-  # Downloads and installs OpenJDK 17 from Microsoft's build.
-  # Idempotent: checks registry for existing Java 17 installation before acting.
-  # The exec only runs if Java 17 is not already installed.
-  # ---------------------------------------------------------------------------
-  $java_installer = 'C:\Windows\Temp\openjdk17.msi'
-  $java_url       = 'https://aka.ms/download-jdk/microsoft-jdk-17-windows-x64.msi'
+$jenkins_url  = 'https://get.jenkins.io/windows/latest'
+$jenkins_msi  = 'C:\Windows\Temp\jenkins.msi'
+$jenkins_xml  = 'C:\Program Files\Jenkins\jenkins.xml'
+$jenkins_port = '8000'
 
-  exec { 'download-java':
-    command  => "Invoke-WebRequest -Uri '${java_url}' -OutFile '${java_installer}' -UseBasicParsing",
-    provider => powershell,
-    creates  => $java_installer,
-  }
-
-  exec { 'install-java':
-    command  => "Start-Process msiexec.exe -ArgumentList '/i ${java_installer} /qn /norestart ADDLOCAL=FeatureMain' -Wait -PassThru",
-    provider => powershell,
-    require  => Exec['download-java'],
-    unless   => 'if (Get-Command java -ErrorAction SilentlyContinue) { java -version 2>&1 | Select-String "17\." } else { exit 1 }',
-  }
-
-  # ---------------------------------------------------------------------------
-  # STEP 2 — Download Jenkins MSI (latest LTS)
-  # ---------------------------------------------------------------------------
-  # Downloads Jenkins LTS MSI directly. Version is pinned here for stability.
-  # Update $jenkins_version to upgrade Jenkins.
-  # Idempotent: only downloads if the MSI file does not already exist.
-  # ---------------------------------------------------------------------------
-  $jenkins_msi     = 'C:\Windows\Temp\jenkins.msi'
-  $jenkins_version = '2.541.2'
-  $jenkins_url     = "https://get.jenkins.io/windows-stable/${jenkins_version}/jenkins.msi"
-
-  exec { 'download-jenkins':
-    command  => "Invoke-WebRequest -Uri '${jenkins_url}' -OutFile '${jenkins_msi}' -UseBasicParsing",
-    provider => powershell,
-    creates  => $jenkins_msi,
-    require  => Exec['install-java'],
-  }
-
-  # ---------------------------------------------------------------------------
-  # STEP 3 — Install Jenkins
-  # ---------------------------------------------------------------------------
-  # Installs Jenkins silently via MSI with PORT=8000 set at install time.
-  # This satisfies Req C natively — no post-install config needed for the port.
-  # Idempotent: only runs if the Jenkins service does not already exist.
-  # ---------------------------------------------------------------------------
-  exec { 'install-jenkins':
-    command  => "Start-Process msiexec.exe -ArgumentList '/i ${jenkins_msi} /qn /norestart PORT=8000 JENKINSDIR=\"C:\\Program Files\\Jenkins\"' -Wait",
-    provider => powershell,
-    require  => Exec['download-jenkins'],
-    unless   => 'if (Get-Service jenkins -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }',
-  }
-
-  # ---------------------------------------------------------------------------
-  # STEP 4 — Disable Setup Wizard
-  # ---------------------------------------------------------------------------
-  # Sets JAVA_OPTS in the Windows registry to disable the setup wizard.
-  # The registry key is read by the Jenkins Windows service wrapper on startup.
-  # Idempotent: registry_value ensures the key exists with the correct value.
-  # If already set correctly Puppet skips this resource entirely.
-  #
-  # Key difference from Linux: no systemd override needed — Windows uses
-  # the registry to pass environment variables to services.
-  # ---------------------------------------------------------------------------
-  registry_value { 'HKLM\SYSTEM\CurrentControlSet\Services\Jenkins\Parameters\JAVA_OPTS':
-    ensure => present,
-    type   => string,
-    data   => '-Djava.awt.headless=true -Djenkins.install.runSetupWizard=false',
-    require => Exec['install-jenkins'],
-  }
-
-  # ---------------------------------------------------------------------------
-  # STEP 5 — Ensure Jenkins service is running and enabled
-  # ---------------------------------------------------------------------------
-  # Puppet's service resource works identically on Windows and Linux.
-  # enable => true sets the service to Automatic start.
-  # ensure => running starts it if stopped.
-  # subscribe means Puppet restarts Jenkins if the registry value changes.
-  # ---------------------------------------------------------------------------
-  service { 'jenkins':
-    ensure    => running,
-    enable    => true,
-    require   => Exec['install-jenkins'],
-    subscribe => Registry_value['HKLM\SYSTEM\CurrentControlSet\Services\Jenkins\Parameters\JAVA_OPTS'],
-  }
-
+# =============================================================================
+# RESOURCE 1 - Download Java 17 MSI
+# Test: MSI file already on disk
+# Set:  Invoke-WebRequest to download it
+# =============================================================================
+dsc { 'download_java':
+  resource_name => 'Script',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    getscript  => 'return @{ Result = (Test-Path "C:\Windows\Temp\java17.msi").ToString() }',
+    testscript => 'return (Test-Path "C:\Windows\Temp\java17.msi")',
+    setscript  => @("
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      Write-Verbose 'Downloading Java 17 MSI...'
+      Invoke-WebRequest -Uri '${java_url}' -OutFile '${java_msi}' -UseBasicParsing
+      Write-Verbose 'Java 17 MSI downloaded.'
+    "~),
+  },
 }
 
-# Apply the class
-include jenkins_windows
+# =============================================================================
+# RESOURCE 2 - Install Java 17
+# Test: Registry key for Adoptium JDK 17 exists
+# Set:  Run MSI silently, wait for completion
+# =============================================================================
+dsc { 'install_java':
+  resource_name => 'Script',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    getscript  => 'return @{ Result = (Test-Path "HKLM:\SOFTWARE\Eclipse Adoptium\JDK\17").ToString() }',
+    testscript => 'return (Test-Path "HKLM:\SOFTWARE\Eclipse Adoptium\JDK\17")',
+    setscript  => @("
+      Write-Verbose 'Installing Java 17...'
+      \$result = Start-Process msiexec.exe -ArgumentList '/i', '${java_msi}', '/qn', '/norestart' -Wait -PassThru
+      if (\$result.ExitCode -notin @(0, 1641, 3010)) {
+        throw \"Java MSI install failed with exit code \$(\$result.ExitCode)\"
+      }
+      Write-Verbose 'Java 17 installed.'
+    "~),
+  },
+  require       => Dsc['download_java'],
+}
+
+# =============================================================================
+# RESOURCE 3 - Download Jenkins MSI
+# Test: MSI file already on disk
+# Set:  Invoke-WebRequest to download it
+# =============================================================================
+dsc { 'download_jenkins':
+  resource_name => 'Script',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    getscript  => 'return @{ Result = (Test-Path "C:\Windows\Temp\jenkins.msi").ToString() }',
+    testscript => 'return (Test-Path "C:\Windows\Temp\jenkins.msi")',
+    setscript  => @("
+      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+      Write-Verbose 'Downloading Jenkins MSI...'
+      Invoke-WebRequest -Uri '${jenkins_url}' -OutFile '${jenkins_msi}' -UseBasicParsing
+      if ((Get-Item '${jenkins_msi}').Length -lt 1MB) {
+        throw 'Jenkins MSI download appears corrupt - file too small'
+      }
+      Write-Verbose 'Jenkins MSI downloaded.'
+    "~),
+  },
+  require       => Dsc['install_java'],
+}
+
+# =============================================================================
+# RESOURCE 4 - Install Jenkins
+# Test: Jenkins Windows service exists
+# Set:  Run MSI silently, wait for completion
+# =============================================================================
+dsc { 'install_jenkins':
+  resource_name => 'Script',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    getscript  => 'return @{ Result = ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null).ToString() }',
+    testscript => 'return ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null)',
+    setscript  => @("
+      Write-Verbose 'Installing Jenkins...'
+      \$result = Start-Process msiexec.exe -ArgumentList '/i', '${jenkins_msi}', '/qn', '/norestart' -Wait -PassThru
+      if (\$result.ExitCode -notin @(0, 1641, 3010)) {
+        throw \"Jenkins MSI install failed with exit code \$(\$result.ExitCode)\"
+      }
+      Write-Verbose 'Jenkins installed.'
+    "~),
+  },
+  require       => Dsc['download_jenkins'],
+}
+
+# =============================================================================
+# RESOURCE 5 - Stop Jenkins before config changes
+# DSC native service resource - no script needed
+# =============================================================================
+dsc { 'jenkins_stopped_for_config':
+  resource_name => 'Service',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    name   => 'jenkins',
+    ensure => 'stopped',
+    state  => 'stopped',
+  },
+  require       => Dsc['install_jenkins'],
+}
+
+# =============================================================================
+# RESOURCE 6 - Configure jenkins.xml
+# Test: jenkins.xml already contains correct port and wizard flag
+# Set:  Regex replace httpPort and inject runSetupWizard=false into JAVA_ARGS
+#
+# jenkins.xml stores the service arguments on one line inside <arguments>.
+# We replace --httpPort=#### with --httpPort=8000 and add the wizard flag
+# if not already present. File is owned by Jenkins MSI install.
+# =============================================================================
+dsc { 'configure_jenkins_xml':
+  resource_name => 'Script',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    getscript  => @("
+      \$xml = Get-Content '${jenkins_xml}' -Raw
+      \$portOk   = \$xml -match '--httpPort=${jenkins_port}'
+      \$wizardOk = \$xml -match 'runSetupWizard=false'
+      return @{ Result = (\$portOk -and \$wizardOk).ToString() }
+    "~),
+    testscript => @("
+      \$xml = Get-Content '${jenkins_xml}' -Raw
+      \$portOk   = \$xml -match '--httpPort=${jenkins_port}'
+      \$wizardOk = \$xml -match 'runSetupWizard=false'
+      return (\$portOk -and \$wizardOk)
+    "~),
+    setscript  => @("
+      Write-Verbose 'Configuring jenkins.xml...'
+      \$xml = Get-Content '${jenkins_xml}' -Raw
+
+      # Replace whatever httpPort value is present with 8000
+      \$xml = \$xml -replace '--httpPort=\d+', '--httpPort=${jenkins_port}'
+
+      # Inject wizard flag into arguments line if not already present
+      if (\$xml -notmatch 'runSetupWizard=false') {
+        \$xml = \$xml -replace '(<arguments>[^<]+)(</arguments>)', '\$1 -Djenkins.install.runSetupWizard=false\$2'
+      }
+
+      Set-Content -Path '${jenkins_xml}' -Value \$xml -Encoding UTF8
+      Write-Verbose 'jenkins.xml updated: port ${jenkins_port}, wizard disabled.'
+    "~),
+  },
+  require       => Dsc['jenkins_stopped_for_config'],
+}
+
+# =============================================================================
+# RESOURCE 7 - Ensure Jenkins service is running
+# DSC native service resource
+# Depends on config being applied first
+# =============================================================================
+dsc { 'jenkins_running':
+  resource_name => 'Service',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    name        => 'jenkins',
+    ensure      => 'running',
+    state       => 'running',
+    startuptype => 'Automatic',
+  },
+  require       => Dsc['configure_jenkins_xml'],
+}

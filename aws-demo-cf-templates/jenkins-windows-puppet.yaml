@@ -30,7 +30,7 @@ Parameters:
 
   ScriptURL:
     Type: String
-    Default: https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/install_jenkins_puppet.ps1
+    Default: https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/install_jenkins_puppet_dsc.ps1
     Description: Raw GitHub URL to the Puppet bootstrap script
 
 # --- RESOURCES ----------------------------------------------------------------
