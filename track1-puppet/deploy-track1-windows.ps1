@@ -46,7 +46,7 @@ aws cloudformation deploy `
     --template-file $Template `
     --stack-name $StackName `
     --region $Region `
-    --parameter-overrides DeployerIP="$MY_IP/32"
+    --parameter-overrides DeployerIP="$MY_IP/32" `
     --capabilities CAPABILITY_NAMED_IAM
 
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: Stack deploy failed." -ForegroundColor Red; exit 1 }
@@ -65,11 +65,12 @@ $JenkinsURL     = ($Outputs | Where-Object { $_.OutputKey -eq "JenkinsURL" }).Ou
 $KeyPairID      = ($Outputs | Where-Object { $_.OutputKey -eq "KeyPairID" }).OutputValue
 $KeyPairSSMPath = ($Outputs | Where-Object { $_.OutputKey -eq "KeyPairSSMPath" }).OutputValue
 $RDPConnection  = ($Outputs | Where-Object { $_.OutputKey -eq "RDPConnection" }).OutputValue
+$InstanceID     = ($Outputs | Where-Object { $_.OutputKey -eq "InstanceID" }).OutputValue
 
 Write-Ok "Public IP:      $PublicIP"
 Write-Ok "Jenkins URL:    $JenkinsURL"
 Write-Ok "RDP Connection: $RDPConnection"
-Write-Ok "Key Pair ID:    $KeyPairID"
+Write-Ok "Instance ID:    $InstanceID"
 
 # --- STEP 4: Retrieve private key from SSM ------------------------------------
 Write-Step "Step 4/6 - Retrieving private key from SSM Parameter Store..."
@@ -96,17 +97,51 @@ icacls .\jenkins-puppet-windows.pem /remove "NT AUTHORITY\Authenticated Users" |
 icacls .\jenkins-puppet-windows.pem /remove "BUILTIN\Users" | Out-Null
 Write-Ok "Permissions set"
 
-# --- STEP 6: Summary ----------------------------------------------------------
-Write-Step "Step 6/6 - Deploy complete"
+# --- STEP 6: Extract Administrator password ----------------------------------
+Write-Step "Step 6/6 - Retrieving Administrator password (polling - up to 10 min)..."
+
+if (-not $InstanceID) {
+    Write-Host "    WARN: InstanceID not in stack outputs - skipping password retrieval." -ForegroundColor Yellow
+    Write-Host "    Retrieve manually: EC2 Console -> Instance -> Get Windows Password" -ForegroundColor Gray
+} else {
+    $AdminPassword = $null
+    $MaxAttempts   = 40
+    $WaitSeconds   = 15
+
+    for ($i = 1; $i -le $MaxAttempts; $i++) {
+        Write-Host "    Attempt $i/$MaxAttempts - waiting for password data..." -ForegroundColor Gray
+        $PasswordData = aws ec2 get-password-data `
+            --instance-id $InstanceID `
+            --priv-launch-key .\jenkins-puppet-windows.pem `
+            --region $Region `
+            --query "PasswordData" `
+            --output text 2>&1
+
+        if ($LASTEXITCODE -eq 0 -and $PasswordData -and $PasswordData -ne "None" -and $PasswordData.Trim() -ne "") {
+            $AdminPassword = $PasswordData.Trim()
+            break
+        }
+        Start-Sleep -Seconds $WaitSeconds
+    }
+
+    if ($AdminPassword) {
+        Write-Ok "Administrator password retrieved"
+        Write-Host ""
+        Write-Host "  ----------------------------------------" -ForegroundColor DarkGray
+        Write-Host "  RDP Credentials" -ForegroundColor Cyan
+        Write-Host "    Host:     $RDPConnection" -ForegroundColor White
+        Write-Host "    User:     Administrator" -ForegroundColor White
+        Write-Host "    Password: $AdminPassword" -ForegroundColor Yellow
+        Write-Host "  ----------------------------------------" -ForegroundColor DarkGray
+    } else {
+        Write-Host "    Password not available after $MaxAttempts attempts." -ForegroundColor Yellow
+        Write-Host "    Windows may still be initializing. Retrieve manually:" -ForegroundColor Gray
+        Write-Host "    aws ec2 get-password-data --instance-id $InstanceID --priv-launch-key .\jenkins-puppet-windows.pem --region $Region --query PasswordData --output text" -ForegroundColor Gray
+    }
+}
+
 Write-Host ""
-Write-Host "  Jenkins URL:    $JenkinsURL" -ForegroundColor Cyan
-Write-Host "  RDP Connection: $RDPConnection" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "  To get the RDP Administrator password:" -ForegroundColor Gray
-Write-Host "  1. Go to EC2 Console -> Instances -> Select instance" -ForegroundColor Gray
-Write-Host "  2. Actions -> Security -> Get Windows Password" -ForegroundColor Gray
-Write-Host "  3. Upload jenkins-puppet-windows.pem to decrypt" -ForegroundColor Gray
-Write-Host ""
-Write-Host "  Allow 5-10 minutes for Windows and Jenkins to fully initialize." -ForegroundColor Gray
-Write-Host "  Jenkins is ready when the URL returns HTTP 403 (auth required)." -ForegroundColor Gray
+Write-Host "  Jenkins URL: $JenkinsURL" -ForegroundColor Cyan
+Write-Host "  Allow 5-10 min for Windows + Jenkins to fully initialize." -ForegroundColor Gray
+Write-Host "  Jenkins is ready when the URL returns HTTP 403." -ForegroundColor Gray
 Write-Host ""
