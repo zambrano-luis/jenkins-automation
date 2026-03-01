@@ -3,13 +3,6 @@
 # Track 1A - Jenkins on Windows Server 2022 via Puppet + DSC Lite
 # =============================================================================
 
-$java_url     = 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.11%2B9/OpenJDK17U-jdk_x64_windows_hotspot_17.0.11_9.msi'
-$java_msi     = 'C:\Windows\Temp\java17.msi'
-$jenkins_url  = 'https://get.jenkins.io/windows/latest'
-$jenkins_msi  = 'C:\Windows\Temp\jenkins.msi'
-$jenkins_xml  = 'C:\Program Files\Jenkins\jenkins.xml'
-$jenkins_port = '8000'
-
 # RESOURCE 1 - Download Java 17 MSI
 dsc { 'download_java':
   resource_name => 'Script',
@@ -17,10 +10,7 @@ dsc { 'download_java':
   properties    => {
     getscript  => 'return @{ Result = (Test-Path "C:\\Windows\\Temp\\java17.msi").ToString() }',
     testscript => 'return (Test-Path "C:\\Windows\\Temp\\java17.msi")',
-    setscript  => @("END"),
-      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-      Invoke-WebRequest -Uri 'https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.11%2B9/OpenJDK17U-jdk_x64_windows_hotspot_17.0.11_9.msi' -OutFile 'C:\Windows\Temp\java17.msi' -UseBasicParsing
-      END
+    setscript  => '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.11%2B9/OpenJDK17U-jdk_x64_windows_hotspot_17.0.11_9.msi" -OutFile "C:\\Windows\\Temp\\java17.msi" -UseBasicParsing',
   },
 }
 
@@ -31,10 +21,7 @@ dsc { 'install_java':
   properties    => {
     getscript  => 'return @{ Result = (Test-Path "HKLM:\\SOFTWARE\\Eclipse Adoptium\\JDK\\17").ToString() }',
     testscript => 'return (Test-Path "HKLM:\\SOFTWARE\\Eclipse Adoptium\\JDK\\17")',
-    setscript  => @("END"),
-      $result = Start-Process msiexec.exe -ArgumentList '/i', 'C:\Windows\Temp\java17.msi', '/qn', '/norestart' -Wait -PassThru
-      if ($result.ExitCode -notin @(0, 1641, 3010)) { throw "Java MSI failed: $($result.ExitCode)" }
-      END
+    setscript  => '$r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\java17.msi","/qn","/norestart") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Java MSI failed: $($r.ExitCode)" }',
   },
   require => Dsc['download_java'],
 }
@@ -46,11 +33,7 @@ dsc { 'download_jenkins':
   properties    => {
     getscript  => 'return @{ Result = (Test-Path "C:\\Windows\\Temp\\jenkins.msi").ToString() }',
     testscript => 'return (Test-Path "C:\\Windows\\Temp\\jenkins.msi")',
-    setscript  => @("END"),
-      [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-      Invoke-WebRequest -Uri 'https://get.jenkins.io/windows/latest' -OutFile 'C:\Windows\Temp\jenkins.msi' -UseBasicParsing
-      if ((Get-Item 'C:\Windows\Temp\jenkins.msi').Length -lt 1MB) { throw 'Jenkins MSI corrupt' }
-      END
+    setscript  => '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri "https://get.jenkins.io/windows/latest" -OutFile "C:\\Windows\\Temp\\jenkins.msi" -UseBasicParsing -MaximumRedirection 5; if ((Get-Item "C:\\Windows\\Temp\\jenkins.msi").Length -lt 1MB) { throw "Jenkins MSI corrupt" }',
   },
   require => Dsc['install_java'],
 }
@@ -62,10 +45,7 @@ dsc { 'install_jenkins':
   properties    => {
     getscript  => 'return @{ Result = ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null).ToString() }',
     testscript => 'return ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null)',
-    setscript  => @("END"),
-      $result = Start-Process msiexec.exe -ArgumentList '/i', 'C:\Windows\Temp\jenkins.msi', '/qn', '/norestart' -Wait -PassThru
-      if ($result.ExitCode -notin @(0, 1641, 3010)) { throw "Jenkins MSI failed: $($result.ExitCode)" }
-      END
+    setscript  => '$r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\jenkins.msi","/qn","/norestart") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Jenkins MSI failed: $($r.ExitCode)" }',
   },
   require => Dsc['download_jenkins'],
 }
@@ -81,27 +61,14 @@ dsc { 'jenkins_stopped_for_config':
   require => Dsc['install_jenkins'],
 }
 
-# RESOURCE 6 - Configure jenkins.xml
+# RESOURCE 6 - Configure jenkins.xml (port 8000 + disable wizard)
 dsc { 'configure_jenkins_xml':
   resource_name => 'Script',
   module        => 'PSDesiredStateConfiguration',
   properties    => {
-    getscript  => @("END"),
-      $xml = Get-Content 'C:\Program Files\Jenkins\jenkins.xml' -Raw
-      return @{ Result = (($xml -match '--httpPort=8000') -and ($xml -match 'runSetupWizard=false')).ToString() }
-      END
-    testscript => @("END"),
-      $xml = Get-Content 'C:\Program Files\Jenkins\jenkins.xml' -Raw
-      return (($xml -match '--httpPort=8000') -and ($xml -match 'runSetupWizard=false'))
-      END
-    setscript  => @("END"),
-      $xml = Get-Content 'C:\Program Files\Jenkins\jenkins.xml' -Raw
-      $xml = $xml -replace '--httpPort=\d+', '--httpPort=8000'
-      if ($xml -notmatch 'runSetupWizard=false') {
-        $xml = $xml -replace '(<arguments>[^<]+)(</arguments>)', '$1 -Djenkins.install.runSetupWizard=false$2'
-      }
-      Set-Content -Path 'C:\Program Files\Jenkins\jenkins.xml' -Value $xml -Encoding UTF8
-      END
+    getscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return @{ Result = (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false")).ToString() }',
+    testscript => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false"))',
+    setscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; $xml = $xml -replace "--httpPort=\\d+","--httpPort=8000"; if ($xml -notmatch "runSetupWizard=false") { $xml = $xml -replace "(<arguments>[^<]+)(</arguments>)","$1 -Djenkins.install.runSetupWizard=false`$2" }; Set-Content -Path "C:\\Program Files\\Jenkins\\jenkins.xml" -Value $xml -Encoding UTF8',
   },
   require => Dsc['jenkins_stopped_for_config'],
 }
