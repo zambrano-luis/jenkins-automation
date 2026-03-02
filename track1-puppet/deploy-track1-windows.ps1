@@ -115,7 +115,7 @@ if (-not $InstanceID) {
             --priv-launch-key .\jenkins-puppet-windows.pem `
             --region $Region `
             --query "PasswordData" `
-            --output text 2>&1
+            --output text 2>$null
 
         if ($LASTEXITCODE -eq 0 -and $PasswordData -and $PasswordData -ne "None" -and $PasswordData.Trim() -ne "") {
             $AdminPassword = $PasswordData.Trim()
