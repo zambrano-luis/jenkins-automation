@@ -1,186 +1,130 @@
 # =============================================================================
-# Jenkins Automation - Track 1A: PowerShell + Puppet (Windows Bootstrap)
-# =============================================================================
-# Bootstraps Puppet agent on Windows Server 2022, installs the puppetlabs-registry
-# module, downloads the Jenkins manifest from GitHub, and runs puppet apply.
-#
-# Puppet then takes over and declares the desired state for:
-#   - Jenkins package and prerequisites
-#   - Port 8000 configuration
-#   - Setup wizard disabled
-#   - Jenkins service running and enabled
-#
-# Requirements satisfied:
-#   A) Runs on a clean OS - all dependencies installed from scratch
-#   B) Fully unattended - no prompts at any stage
-#   C) Jenkins listens on port 8000 natively
-#   D) Idempotent - puppet apply converges to desired state on every run
-#
-# Usage:
-#   powershell.exe -ExecutionPolicy Bypass -File install_jenkins_puppet.ps1
-#
-# Author: Luis Zambrano
+# Track 1A - Windows Bootstrap: Puppet Agent + DSC Lite
+# Installs Puppet, installs puppetlabs-dsc_lite, then runs puppet apply.
+# All Jenkins configuration is handled declaratively inside the manifest.
 # =============================================================================
 
 $ErrorActionPreference = "Stop"
 
-# --- CONSTANTS ----------------------------------------------------------------
-$PuppetVersionUrl  = "https://downloads.puppet.com/puppet-agent/latest.json"
-$PuppetInstallDir  = "C:\Program Files\Puppet Labs\Puppet\bin"
-$PuppetBin         = "C:\Program Files\Puppet Labs\Puppet\bin\puppet.bat"
-$PuppetModulePath  = "C:\ProgramData\PuppetLabs\puppet\etc\modules"
-$PuppetModule      = "puppetlabs-registry"
-$ManifestUrl       = "https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/manifests/jenkins-windows.pp"
-$ManifestPath      = "$env:TEMP\jenkins.pp"
-$MsiPath           = "$env:TEMP\puppet-agent.msi"
+# --- Config ------------------------------------------------------------------
+$PuppetVersion  = "8.10.0"
+$PuppetMsiUrl   = "https://downloads.puppet.com/windows/puppet8/puppet-agent-$PuppetVersion-x64.msi"
+$PuppetMsiPath  = "C:\Windows\Temp\puppet-agent.msi"
+$PuppetBin      = "C:\Program Files\Puppet Labs\Puppet\bin"
 
-# --- LOGGING ------------------------------------------------------------------
-function Write-Header {
+function Write-Step($n, $total, $msg) {
     Write-Host ""
-    Write-Host "╔══════════════════════════════════════════════════╗" -ForegroundColor Yellow
-    Write-Host "║  Jenkins Automation - Track 1A: Puppet Windows  ║" -ForegroundColor Yellow
-    Write-Host "║  Target: Windows Server 2022                    ║" -ForegroundColor Yellow
-    Write-Host "║  Port:   8000                                   ║" -ForegroundColor Yellow
-    Write-Host "╚══════════════════════════════════════════════════╝" -ForegroundColor Yellow
-    Write-Host ""
+    Write-Host "==> Step $n/$total - $msg" -ForegroundColor Cyan
 }
 
-function Write-Step { param($msg) Write-Host "`n==> [$(Get-Date -Format 'HH:mm:ss')] $msg" -ForegroundColor Yellow }
-function Write-Info { param($msg) Write-Host "    [$(Get-Date -Format 'HH:mm:ss')] ->  $msg" -ForegroundColor Gray }
-function Write-Skip { param($msg) Write-Host "    [$(Get-Date -Format 'HH:mm:ss')] SKIP: $msg - already done" -ForegroundColor Cyan }
-function Write-Ok   { param($msg) Write-Host "    [$(Get-Date -Format 'HH:mm:ss')] OK  $msg" -ForegroundColor Green }
-function Write-Fail { param($msg) Write-Host "`nERROR: $msg" -ForegroundColor Red; exit 1 }
+function Write-Skip($msg) {
+    Write-Host "    [SKIP] $msg already satisfied" -ForegroundColor DarkGray
+}
 
-function Download-File {
-    param($Url, $OutFile, $Label)
-    Write-Info "Downloading $Label..."
-    Write-Info "URL: $Url"
-    Write-Info "Destination: $OutFile"
-    $start = Get-Date
+function Write-Done($msg) {
+    Write-Host "    [OK]   $msg" -ForegroundColor Green
+}
+
+# --- Step 1: Check / Install Puppet ------------------------------------------
+Write-Step 1 5 "Puppet Agent"
+
+$puppetExe = "$PuppetBin\puppet.bat"
+if (Test-Path $puppetExe) {
+    Write-Skip "Puppet agent"
+} else {
+    Write-Host "    Downloading Puppet $PuppetVersion..." -ForegroundColor Yellow
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $PuppetMsiUrl -OutFile $PuppetMsiPath -UseBasicParsing
+
+    Write-Host "    Installing Puppet silently..." -ForegroundColor Yellow
+    $result = Start-Process msiexec.exe -ArgumentList "/i `"$PuppetMsiPath`" /qn /norestart INSTALLDIR=`"C:\Program Files\Puppet Labs\Puppet`"" -Wait -PassThru
+    if ($result.ExitCode -notin @(0, 1641, 3010)) {
+        throw "Puppet MSI install failed with exit code $($result.ExitCode)"
+    }
+    Write-Done "Puppet agent installed"
+}
+
+# Add Puppet bin to PATH for this session
+if ($env:PATH -notlike "*Puppet Labs*") {
+    $env:PATH = "$PuppetBin;$env:PATH"
+}
+
+# --- Step 2: Install puppetlabs-dsc_lite -------------------------------------
+Write-Step 2 5 "puppetlabs-dsc_lite module"
+
+$moduleCheck = & "$puppetExe" module list 2>&1 | Select-String "dsc_lite"
+if ($moduleCheck) {
+    Write-Skip "puppetlabs-dsc_lite"
+} else {
+    Write-Host "    Installing puppetlabs-dsc_lite..." -ForegroundColor Yellow
+    & "$puppetExe" module install puppetlabs-dsc_lite
+    if ($LASTEXITCODE -ne 0) { throw "Module install failed" }
+    Write-Done "puppetlabs-dsc_lite installed"
+}
+
+# --- Step 3: Install puppetlabs-stdlib (dsc_lite dependency) ----------------
+Write-Step 3 5 "puppetlabs-stdlib module"
+
+$stdlibCheck = & "$puppetExe" module list 2>&1 | Select-String "stdlib"
+if ($stdlibCheck) {
+    Write-Skip "puppetlabs-stdlib"
+} else {
+    Write-Host "    Installing puppetlabs-stdlib..." -ForegroundColor Yellow
+    & "$puppetExe" module install puppetlabs-stdlib
+    if ($LASTEXITCODE -ne 0) { throw "stdlib install failed" }
+    Write-Done "puppetlabs-stdlib installed"
+}
+
+# --- Step 4: Download manifest -----------------------------------------------
+Write-Step 4 5 "Downloading Jenkins manifest"
+
+$ManifestUrl  = "https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/manifests/jenkins-windows.pp"
+$ManifestPath = "C:\jenkins-windows.pp"
+
+if (Test-Path $ManifestPath) {
+    Write-Skip "Manifest already present at $ManifestPath"
+} else {
+    Write-Host "    Downloading jenkins-windows.pp..." -ForegroundColor Yellow
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $ManifestUrl -OutFile $ManifestPath -UseBasicParsing
+    if (-not (Test-Path $ManifestPath)) { throw "Manifest download failed" }
+    Write-Done "Manifest saved to $ManifestPath"
+}
+
+# --- Step 5: Apply manifest --------------------------------------------------
+Write-Step 5 5 "puppet apply $ManifestPath"
+
+if (-not (Test-Path $ManifestPath)) {
+    throw "Manifest not found at $ManifestPath"
+}
+
+& "$puppetExe" apply $ManifestPath --detailed-exitcodes
+$puppetExit = $LASTEXITCODE
+
+# puppet apply exit codes:
+#   0 = success, no changes
+#   2 = success, changes applied
+#   4 = failures
+#   6 = changes + failures
+if ($puppetExit -in @(0, 2)) {
+    Write-Host ""
+    Write-Host "==> Manifest applied successfully (exit $puppetExit)" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "    Verifying Jenkins on port 8000..." -ForegroundColor Cyan
+    Start-Sleep -Seconds 10
     try {
-        Start-BitsTransfer -Source $Url -Destination $OutFile -DisplayName $Label -Description "Downloading..."
+        $response = Invoke-WebRequest -Uri "http://localhost:8000" -UseBasicParsing -TimeoutSec 15
+        Write-Host "    Jenkins responded: HTTP $($response.StatusCode)" -ForegroundColor Green
     } catch {
-        Write-Info "BITS transfer failed, falling back to Invoke-WebRequest..."
-        Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -Verbose
+        # 403 comes through as an exception in PowerShell
+        if ($_.Exception.Response.StatusCode.value__ -eq 403) {
+            Write-Host "    Jenkins responded: HTTP 403 - running and requiring auth. SUCCESS." -ForegroundColor Green
+        } else {
+            Write-Host "    Jenkins may still be starting. Check: curl http://localhost:8000" -ForegroundColor Yellow
+        }
     }
-    $elapsed = ((Get-Date) - $start).TotalSeconds
-    $size = [math]::Round((Get-Item $OutFile).Length / 1MB, 1)
-    Write-Ok "Downloaded $Label - ${size}MB in ${elapsed}s"
-}
-
-function Write-Summary {
+} else {
     Write-Host ""
-    Write-Host "╔══════════════════════════════════════════════════╗" -ForegroundColor Green
-    Write-Host "║             Installation Complete                ║" -ForegroundColor Green
-    Write-Host "╠══════════════════════════════════════════════════╣" -ForegroundColor Green
-    Write-Host "║  Jenkins is running on port 8000                 ║" -ForegroundColor Green
-    Write-Host "║                                                  ║" -ForegroundColor Green
-    Write-Host "║  Access:  http://<your-ip>:8000              ║" -ForegroundColor Green
-    Write-Host "║  Logs:    Get-EventLog -LogName Application      ║" -ForegroundColor Green
-    Write-Host "║  Puppet:  puppet apply manifests\jenkins.pp      ║" -ForegroundColor Green
-    Write-Host "╚══════════════════════════════════════════════════╝" -ForegroundColor Green
-    Write-Host ""
+    Write-Host "==> puppet apply exited with code $puppetExit - review output above" -ForegroundColor Red
+    exit $puppetExit
 }
-
-# --- HELPERS ------------------------------------------------------------------
-function Ensure-Admin {
-    $current = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-    if (-not $current.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Write-Fail "This script must be run as Administrator."
-    }
-}
-
-function Is-PuppetInstalled {
-    return Test-Path $PuppetBin
-}
-
-# --- STEP 1: Install Puppet Agent ---------------------------------------------
-function Step-InstallPuppet {
-    Write-Step "Step 1/4 - Installing Puppet agent"
-
-    if (Is-PuppetInstalled) {
-        Write-Skip "Puppet agent already installed"
-        return
-    }
-
-    Write-Info "Fetching latest Puppet agent version from Puppet API..."
-    try {
-        $response = Invoke-RestMethod -Uri $PuppetVersionUrl -UseBasicParsing
-        $version  = $response.version
-    } catch {
-        Write-Fail "Failed to fetch latest Puppet version from $PuppetVersionUrl - $_"
-    }
-
-    $msiUrl = "https://downloads.puppet.com/windows/puppet-agent-$version-x64.msi"
-    Write-Info "Latest version: $version"
-    Download-File -Url $msiUrl -OutFile $MsiPath -Label "Puppet agent $version MSI"
-
-    Write-Info "Installing Puppet agent silently (this takes 1-2 minutes)..."
-    Write-Info "MSI log: $env:TEMP\puppet-install.log"
-    $install = Start-Process msiexec.exe -ArgumentList "/i `"$MsiPath`" /qn /norestart /L*v `"$env:TEMP\puppet-install.log`"" -Wait -PassThru
-    Write-Info "MSI exit code: $($install.ExitCode)"
-    if ($install.ExitCode -notin @(0, 3010)) {
-        Write-Fail "Puppet MSI installation failed with exit code $($install.ExitCode)"
-    }
-
-    # Add Puppet to PATH for this session
-    $env:PATH = "$PuppetInstallDir;$env:PATH"
-
-    Write-Ok "Puppet agent $version installed"
-}
-
-# --- STEP 2: Install puppetlabs-registry module ------------------------------------
-function Step-InstallModule {
-    Write-Step "Step 2/4 - Installing $PuppetModule module"
-
-    $moduleCheck = & "$PuppetBin" module list 2>&1 | Select-String $PuppetModule
-    if ($moduleCheck) {
-        Write-Skip "$PuppetModule already installed"
-        return
-    }
-
-    Write-Info "Installing $PuppetModule..."
-    & "$PuppetBin" module install $PuppetModule --target-dir $PuppetModulePath
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail "Failed to install $PuppetModule module"
-    }
-
-    Write-Ok "$PuppetModule installed"
-}
-
-# --- STEP 3: Download manifest ------------------------------------------------
-function Step-DownloadManifest {
-    Write-Step "Step 3/4 - Downloading Jenkins manifest"
-
-    Download-File -Url $ManifestUrl -OutFile $ManifestPath -Label "Jenkins Puppet manifest"
-
-    Write-Ok "Manifest saved to $ManifestPath"
-}
-
-# --- STEP 4: Run puppet apply -------------------------------------------------
-function Step-PuppetApply {
-    Write-Step "Step 4/4 - Applying Puppet manifest"
-
-    Write-Info "Running puppet apply (this may take a few minutes)..."
-    & "$PuppetBin" apply $ManifestPath --modulepath $PuppetModulePath
-    
-    # Puppet exit codes:
-    # 0 = success, no changes
-    # 2 = success, changes were made
-    # 4 = failures
-    # 6 = changes and failures
-    if ($LASTEXITCODE -notin @(0, 2)) {
-        Write-Fail "Puppet apply failed with exit code $LASTEXITCODE"
-    }
-
-    Write-Ok "Puppet apply completed successfully"
-}
-
-# --- MAIN ---------------------------------------------------------------------
-Write-Header
-Ensure-Admin
-Step-InstallPuppet
-Step-InstallModule
-Step-DownloadManifest
-Step-PuppetApply
-Write-Summary
