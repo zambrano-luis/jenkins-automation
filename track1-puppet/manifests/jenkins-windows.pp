@@ -1,6 +1,10 @@
 # =============================================================================
 # jenkins-windows.pp
 # Track 1A - Jenkins on Windows Server 2022 via Puppet + DSC Lite
+#
+# Resource chain:
+#   download_java -> install_java -> set_java_home -> set_java_path
+#   -> download_jenkins -> install_jenkins -> configure_and_start_jenkins
 # =============================================================================
 
 # RESOURCE 1 - Download Java 17 MSI
@@ -26,19 +30,7 @@ dsc { 'install_java':
   require => Dsc['download_java'],
 }
 
-# RESOURCE 3 - Download Jenkins MSI
-dsc { 'download_jenkins':
-  resource_name => 'Script',
-  module        => 'PSDesiredStateConfiguration',
-  properties    => {
-    getscript  => 'return @{ Result = (Test-Path "C:\\Windows\\Temp\\jenkins.msi").ToString() }',
-    testscript => 'return (Test-Path "C:\\Windows\\Temp\\jenkins.msi")',
-    setscript  => '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile("https://get.jenkins.io/windows-stable/2.528.2/jenkins.msi","C:\\Windows\\Temp\\jenkins.msi"); if ((Get-Item "C:\\Windows\\Temp\\jenkins.msi").Length -lt 1MB) { throw "Jenkins MSI corrupt" }',
-  },
-  require => Dsc['install_java'],
-}
-
-# RESOURCE 4 - Set JAVA_HOME system environment variable
+# RESOURCE 3 - Set JAVA_HOME
 dsc { 'set_java_home':
   resource_name => 'Environment',
   module        => 'PSDesiredStateConfiguration',
@@ -50,7 +42,7 @@ dsc { 'set_java_home':
   require => Dsc['install_java'],
 }
 
-# RESOURCE 5 - Add Java bin to system PATH
+# RESOURCE 4 - Add Java to system PATH
 dsc { 'set_java_path':
   resource_name => 'Environment',
   module        => 'PSDesiredStateConfiguration',
@@ -63,6 +55,18 @@ dsc { 'set_java_path':
   require => Dsc['set_java_home'],
 }
 
+# RESOURCE 5 - Download Jenkins MSI
+dsc { 'download_jenkins':
+  resource_name => 'Script',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    getscript  => 'return @{ Result = (Test-Path "C:\\Windows\\Temp\\jenkins.msi").ToString() }',
+    testscript => 'return (Test-Path "C:\\Windows\\Temp\\jenkins.msi")',
+    setscript  => '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; (New-Object System.Net.WebClient).DownloadFile("https://get.jenkins.io/windows-stable/2.528.2/jenkins.msi","C:\\Windows\\Temp\\jenkins.msi"); if ((Get-Item "C:\\Windows\\Temp\\jenkins.msi").Length -lt 1MB) { throw "Jenkins MSI corrupt" }',
+  },
+  require => Dsc['set_java_path'],
+}
+
 # RESOURCE 6 - Install Jenkins
 dsc { 'install_jenkins':
   resource_name => 'Script',
@@ -72,64 +76,65 @@ dsc { 'install_jenkins':
     testscript => 'return ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null)',
     setscript  => '$r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\jenkins.msi","/qn","/norestart") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Jenkins MSI failed: $($r.ExitCode)" }',
   },
-  require => Dsc['set_java_path'],
+  require => Dsc['download_jenkins'],
 }
-# RESOURCE 7 - Stop Jenkins before config changes
-dsc { 'jenkins_stopped_for_config':
-  resource_name => 'Service',
+
+# RESOURCE 7 - Configure Jenkins and ensure it is running correctly
+# testscript checks ALL conditions in one shot:
+#   - Jenkins service is running
+#   - Listening on port 8000
+#   - jenkins.xml points to java.exe with correct args
+#   - Wizard state files present
+#   - Firewall rule exists
+# Only runs setscript if any condition fails.
+# setscript stops service, fixes everything, starts service.
+dsc { 'configure_and_start_jenkins':
+  resource_name => 'Script',
   module        => 'PSDesiredStateConfiguration',
   properties    => {
-    name  => 'jenkins',
-    state => 'stopped',
+    getscript  => '
+      $svc     = (Get-Service jenkins -ErrorAction SilentlyContinue)
+      $running = ($svc -ne $null -and $svc.Status -eq "Running")
+      $port    = (netstat -an | Select-String ":8000.*LISTENING") -ne $null
+      $xmlOk   = $false
+      $p = "C:\\Program Files\\Jenkins\\jenkins.xml"
+      if (Test-Path $p) { $xml = Get-Content $p -Raw; $xmlOk = ($xml -match "--httpPort=8000") -and ($xml -match "java.exe") -and ($xml -match "runSetupWizard=false") }
+      $wizardOk = (Test-Path "C:\\Windows\\system32\\config\\systemprofile\\.jenkins\\jenkins.install.InstallUtil.lastExecVersion")
+      $fwOk    = ((Get-NetFirewallRule -DisplayName "Jenkins-8000" -ErrorAction SilentlyContinue) -ne $null)
+      return @{ Result = ($running -and $port -and $xmlOk -and $wizardOk -and $fwOk).ToString() }
+    ',
+    testscript => '
+      $svc     = (Get-Service jenkins -ErrorAction SilentlyContinue)
+      $running = ($svc -ne $null -and $svc.Status -eq "Running")
+      $port    = (netstat -an | Select-String ":8000.*LISTENING") -ne $null
+      $xmlOk   = $false
+      $p = "C:\\Program Files\\Jenkins\\jenkins.xml"
+      if (Test-Path $p) { $xml = Get-Content $p -Raw; $xmlOk = ($xml -match "--httpPort=8000") -and ($xml -match "java.exe") -and ($xml -match "runSetupWizard=false") }
+      $wizardOk = (Test-Path "C:\\Windows\\system32\\config\\systemprofile\\.jenkins\\jenkins.install.InstallUtil.lastExecVersion")
+      $fwOk    = ((Get-NetFirewallRule -DisplayName "Jenkins-8000" -ErrorAction SilentlyContinue) -ne $null)
+      return ($running -and $port -and $xmlOk -and $wizardOk -and $fwOk)
+    ',
+    setscript  => '
+      Stop-Service jenkins -ErrorAction SilentlyContinue
+      Start-Sleep -Seconds 3
+
+      $p    = "C:\\Program Files\\Jenkins\\jenkins.xml"
+      $java = "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.11.9-hotspot\\bin\\java.exe"
+      $war  = "C:\\Program Files\\Jenkins\\jenkins.war"
+      $xml  = "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`r`n<service>`r`n  <id>Jenkins</id>`r`n  <n>Jenkins</n>`r`n  <description>Jenkins Automation Server</description>`r`n  <executable>$java</executable>`r`n  <arguments>-Xrs -Xmx256m -Dhudson.lifecycle=hudson.lifecycle.WindowsServiceLifecycle -jar `"$war`" --httpPort=8000 --webroot=`"%LocalAppData%\\Jenkins\\war`" -Djenkins.install.runSetupWizard=false</arguments>`r`n  <logmode>rotate</logmode>`r`n</service>"
+      Set-Content -Path $p -Value $xml -Encoding UTF8
+
+      $d = "C:\\Windows\\system32\\config\\systemprofile\\.jenkins"
+      if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force }
+      Set-Content -Path "$d\\jenkins.install.InstallUtil.lastExecVersion" -Value "2.528.2"
+      Set-Content -Path "$d\\jenkins.install.UpgradeWizard.state" -Value "2.528.2"
+
+      if (-not (Get-NetFirewallRule -DisplayName "Jenkins-8000" -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -DisplayName "Jenkins-8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Any
+      }
+
+      Start-Service jenkins
+    ',
   },
   require => Dsc['install_jenkins'],
-}
-
-# RESOURCE 8 - Configure jenkins.xml (port 8000 + disable wizard, create if missing)
-dsc { 'configure_jenkins_xml':
-  resource_name => 'Script',
-  module        => 'PSDesiredStateConfiguration',
-  properties    => {
-    getscript  => '$p = "C:\\Program Files\\Jenkins\\jenkins.xml"; if (-not (Test-Path $p)) { return @{ Result = "False" } }; $xml = Get-Content $p -Raw; return @{ Result = (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false") -and ($xml -match "java.exe")).ToString() }',
-    testscript => '$p = "C:\\Program Files\\Jenkins\\jenkins.xml"; if (-not (Test-Path $p)) { return $false }; $xml = Get-Content $p -Raw; return (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false") -and ($xml -match "java.exe"))',
-    setscript  => '$p = "C:\\Program Files\\Jenkins\\jenkins.xml"; $java = "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.11.9-hotspot\\bin\\java.exe"; $war = "C:\\Program Files\\Jenkins\\jenkins.war"; $xml = "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`r`n<service>`r`n  <id>Jenkins</id>`r`n  <name>Jenkins</name>`r`n  <description>Jenkins Automation Server</description>`r`n  <executable>$java</executable>`r`n  <arguments>-Xrs -Xmx256m -Dhudson.lifecycle=hudson.lifecycle.WindowsServiceLifecycle -jar `"$war`" --httpPort=8000 --webroot=`"%LocalAppData%\\Jenkins\\war`" -Djenkins.install.runSetupWizard=false</arguments>`r`n  <logmode>rotate</logmode>`r`n</service>"; Set-Content -Path $p -Value $xml -Encoding UTF8',
-  },
-  require => Dsc['jenkins_stopped_for_config'],
-}
-
-
-# RESOURCE 9 - Open Windows Firewall for Jenkins port 8000
-dsc { 'jenkins_firewall':
-  resource_name => 'Script',
-  module        => 'PSDesiredStateConfiguration',
-  properties    => {
-    getscript  => 'return @{ Result = ((Get-NetFirewallRule -DisplayName "Jenkins-8000" -ErrorAction SilentlyContinue) -ne $null).ToString() }',
-    testscript => 'return ((Get-NetFirewallRule -DisplayName "Jenkins-8000" -ErrorAction SilentlyContinue) -ne $null)',
-    setscript  => 'New-NetFirewallRule -DisplayName "Jenkins-8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Any',
-  },
-  require => Dsc['configure_jenkins_xml'],
-}
-
-# RESOURCE 10 - Disable setup wizard via install state file
-dsc { 'disable_setup_wizard':
-  resource_name => 'Script',
-  module        => 'PSDesiredStateConfiguration',
-  properties    => {
-    getscript  => '$f = "C:\\Windows\\system32\\config\\systemprofile\\AppData\\Local\\Jenkins\\.jenkins\\jenkins.install.InstallUtil.lastExecVersion"; return @{ Result = (Test-Path $f).ToString() }',
-    testscript => '$f = "C:\\Windows\\system32\\config\\systemprofile\\AppData\\Local\\Jenkins\\.jenkins\\jenkins.install.InstallUtil.lastExecVersion"; return (Test-Path $f)',
-    setscript  => '$d = "C:\\Windows\\system32\\config\\systemprofile\\AppData\\Local\\Jenkins\\.jenkins"; if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force }; Set-Content -Path "$d\\jenkins.install.InstallUtil.lastExecVersion" -Value "2.528.2"; Set-Content -Path "$d\\jenkins.install.UpgradeWizard.state" -Value "2.528.2"',
-  },
-  require => Dsc['jenkins_firewall'],
-}
-
-# RESOURCE 11 - Ensure Jenkins is running
-dsc { 'jenkins_running':
-  resource_name => 'Service',
-  module        => 'PSDesiredStateConfiguration',
-  properties    => {
-    name        => 'jenkins',
-    state       => 'running',
-    startuptype => 'Automatic',
-  },
-  require => Dsc['disable_setup_wizard'],
 }
