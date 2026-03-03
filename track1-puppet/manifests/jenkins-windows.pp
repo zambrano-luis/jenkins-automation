@@ -97,7 +97,32 @@ dsc { 'configure_jenkins_xml':
   require => Dsc['jenkins_stopped_for_config'],
 }
 
-# RESOURCE 9 - Ensure Jenkins is running
+
+# RESOURCE 9 - Open Windows Firewall for Jenkins port 8000
+dsc { 'jenkins_firewall':
+  resource_name => 'Script',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    getscript  => 'return @{ Result = ((Get-NetFirewallRule -DisplayName "Jenkins-8000" -ErrorAction SilentlyContinue) -ne $null).ToString() }',
+    testscript => 'return ((Get-NetFirewallRule -DisplayName "Jenkins-8000" -ErrorAction SilentlyContinue) -ne $null)',
+    setscript  => 'New-NetFirewallRule -DisplayName "Jenkins-8000" -Direction Inbound -Protocol TCP -LocalPort 8000 -Action Allow -Profile Any',
+  },
+  require => Dsc['configure_jenkins_xml'],
+}
+
+# RESOURCE 10 - Disable setup wizard via install state file
+dsc { 'disable_setup_wizard':
+  resource_name => 'Script',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    getscript  => '$f = "C:\\Windows\\system32\\config\\systemprofile\\AppData\\Local\\Jenkins\\.jenkins\\jenkins.install.InstallUtil.lastExecVersion"; return @{ Result = (Test-Path $f).ToString() }',
+    testscript => '$f = "C:\\Windows\\system32\\config\\systemprofile\\AppData\\Local\\Jenkins\\.jenkins\\jenkins.install.InstallUtil.lastExecVersion"; return (Test-Path $f)',
+    setscript  => '$d = "C:\\Windows\\system32\\config\\systemprofile\\AppData\\Local\\Jenkins\\.jenkins"; if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force }; Set-Content -Path "$d\\jenkins.install.InstallUtil.lastExecVersion" -Value "2.528.2"; Set-Content -Path "$d\\jenkins.install.UpgradeWizard.state" -Value "2.528.2"',
+  },
+  require => Dsc['jenkins_firewall'],
+}
+
+# RESOURCE 11 - Ensure Jenkins is running
 dsc { 'jenkins_running':
   resource_name => 'Service',
   module        => 'PSDesiredStateConfiguration',
@@ -106,5 +131,5 @@ dsc { 'jenkins_running':
     state       => 'running',
     startuptype => 'Automatic',
   },
-  require => Dsc['configure_jenkins_xml'],
+  require => Dsc['disable_setup_wizard'],
 }
