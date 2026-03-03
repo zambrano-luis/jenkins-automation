@@ -91,18 +91,26 @@ if (Test-Path $ManifestPath) {
     Write-Done "Manifest saved to $ManifestPath"
 }
 
-# --- Step 5: Set Java in system PATH -----------------------------------------
-Write-Step 5 6 "Setting Java in system PATH"
+# --- Step 5: Set Java in system PATH and JAVA_HOME --------------------------
+Write-Step 5 6 "Setting Java environment variables"
 
-$JavaBin  = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot\bin"
+$JavaHome = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
+$JavaBin  = "$JavaHome\bin"
 $SysPath  = [Environment]::GetEnvironmentVariable("Path", "Machine")
 
-if ($SysPath -like "*Adoptium*") {
-    Write-Skip "Java already in system PATH"
+if ([Environment]::GetEnvironmentVariable("JAVA_HOME", "Machine") -ne $JavaHome) {
+    [Environment]::SetEnvironmentVariable("JAVA_HOME", $JavaHome, "Machine")
+    Write-Done "JAVA_HOME set"
 } else {
+    Write-Skip "JAVA_HOME already set"
+}
+
+if ($SysPath -notlike "*Adoptium*") {
     [Environment]::SetEnvironmentVariable("Path", "$SysPath;$JavaBin", "Machine")
     $env:Path = "$env:Path;$JavaBin"
     Write-Done "Java added to system PATH"
+} else {
+    Write-Skip "Java already in system PATH"
 }
 
 # --- Step 6: Apply manifest --------------------------------------------------
