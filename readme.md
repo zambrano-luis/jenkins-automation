@@ -1,6 +1,6 @@
 # Jenkins Automation
 
-Automated installation and configuration of Jenkins CI server across multiple platforms and toolchain. The purpose is to demonstrate infrastructure automation, idempotency, and cross-platform provisioning.
+Automated installation and configuration of Jenkins CI server across multiple platforms and toolchains. This repository is a technical assessment submission demonstrating infrastructure automation, idempotency, and cross-platform provisioning.
 
 Jenkins is configured to listen natively on **port 8000** in all tracks - not via port forwarding, proxy, or NAT.
 
@@ -24,49 +24,61 @@ Every track in this repository satisfies the same four requirements:
 ```
 jenkins-automation/
 ├── README.md
-├── .gitignore
-├── Vagrantfile                                    # Local Linux replication
 ├── track1-puppet/
 │   ├── manifests/
-│   │   └── jenkins.pp                            # Puppet manifest (shared across OS targets)
-│   ├── install_jenkins_puppet.py                 # Linux bootstrap - Python -> puppet apply
-│   └── install_jenkins_puppet.ps1                # Windows bootstrap - PowerShell -> puppet apply
+│   │   ├── jenkins-linux.pp                      # Puppet manifest - Linux (Track 1B)
+│   │   └── jenkins-windows.pp                    # Puppet manifest - Windows DSC (Track 1A)
+│   ├── install_jenkins_puppet.py                 # Track 1B bootstrap - Python -> puppet apply
+│   ├── install_jenkins_puppet_dsc.ps1            # Track 1A bootstrap - PowerShell -> puppet apply
+│   ├── deploy-track1-linux.ps1                   # AWS deploy script - Linux EC2
+│   └── deploy-track1-windows.ps1                 # AWS deploy script - Windows EC2
 ├── track2-python/
-│   ├── install_jenkins.py                        # Pure Python installer - Ubuntu 20.04+ LTS
-│   ├── deploy-track2-linux.ps1                   # PowerShell deploy script (Windows)
-│   ├── deploy-track2-linux.sh                    # Bash deploy script (Linux/macOS)
-│   ├── cleanup-track2-linux.ps1                  # PowerShell cleanup script (Windows)
-│   └── cleanup-track2-linux.sh                   # Bash cleanup script (Linux/macOS)
+│   ├── install_jenkins.py                        # Pure Python installer - Ubuntu 22.04 LTS
+│   ├── deploy-track2-linux.ps1                   # PowerShell deploy script (Windows host)
+│   ├── deploy-track2-linux.sh                    # Bash deploy script (Linux/macOS host)
+│   ├── cleanup-track2-linux.ps1                  # PowerShell cleanup script
+│   └── cleanup-track2-linux.sh                   # Bash cleanup script
 └── aws-demo-cf-templates/
-    ├── jenkins-linux.yaml                        # CloudFormation - Ubuntu EC2
-    └── jenkins-windows.yaml                      # CloudFormation - Windows Server 2022 EC2
+    ├── jenkins-linux-puppet.yaml                 # CloudFormation - Ubuntu EC2 (Track 1B)
+    ├── jenkins-linux.yaml                        # CloudFormation - Ubuntu EC2 (Track 2)
+    └── jenkins-windows-puppet.yaml               # CloudFormation - Windows Server 2022 EC2 (Track 1A)
 ```
 
 ---
 
 ## Tracks
 
-### Track 1 - Python / PowerShell + Puppet (Masterless)
+### Track 1B - Python + Puppet (Linux)
 
-The bootstrap layer installs Puppet agent silently, then runs `puppet apply` against the shared manifest. The manifest is OS-agnostic - only the bootstrap differs between platforms.
+The Python bootstrap installs Puppet agent silently, installs required modules, then runs `puppet apply` against the Linux manifest. The manifest uses native Puppet resource types (`package`, `service`, `file_line`) for clean declarative configuration.
 
-**Track 1B - Linux (Ubuntu 22.04 LTS)**
+**Validated on:** Ubuntu 22.04 LTS, AWS EC2 t3.medium
 
 ```bash
 sudo python3 track1-puppet/install_jenkins_puppet.py
 ```
 
-**Track 1A - Windows (Windows Server 2022)**
+---
+
+### Track 1A - PowerShell + Puppet + DSC (Windows)
+
+The PowerShell bootstrap installs Puppet agent, installs `puppetlabs-dsc_lite` and `puppetlabs-stdlib`, sets `JAVA_HOME` and `PATH` for Java, downloads the manifest, then runs `puppet apply`. The manifest delegates all Windows-native operations to DSC resources — no exec blocks.
+
+**Validated on:** Windows Server 2022, AWS EC2 t3.medium
+
+> **Note:** The Windows manifest uses DSC resources and diverges significantly from the Linux manifest. Windows requires explicit Java path management, MSI-based package installation, service wrapper configuration, and Windows Firewall rules. A shared cross-OS manifest was attempted but proved impractical — the bootstraps differ, the package managers differ, and the config file paths differ.
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File track1-puppet\install_jenkins_puppet.ps1
+powershell.exe -ExecutionPolicy Bypass -File track1-puppet\install_jenkins_puppet_dsc.ps1
 ```
 
 ---
 
-### Track 2 - Pure Python
+### Track 2 - Pure Python (Linux)
 
 Single self-contained script. No dependencies beyond Python 3 stdlib. Designed for Ubuntu 20.04+ LTS where Python 3 ships by default.
+
+**Validated on:** Ubuntu 22.04 LTS, AWS EC2 t3.medium
 
 ```bash
 sudo python3 track2-python/install_jenkins.py
@@ -74,11 +86,11 @@ sudo python3 track2-python/install_jenkins.py
 
 ---
 
-### AWS Demo - CloudFormation Templates
+## AWS Demo - CloudFormation
 
-Provisions a fully self-contained EC2 environment including security group and SSH key pair. No pre-existing key pairs or manual setup required. The instance pulls the provisioning script directly from this repository via UserData on first boot.
+Provisions a fully self-contained EC2 environment including VPC security group, IAM role, and SSH/RDP key pair. The instance pulls the provisioning script directly from this repository via UserData on first boot.
 
-The key pair is created by the stack and stored automatically in AWS SSM Parameter Store. It is deleted when the stack is deleted. Retrieve it once immediately after deploy.
+The key pair is created by the stack and stored in AWS SSM Parameter Store. Retrieved automatically by the deploy scripts. Deleted when the stack is deleted.
 
 **Prerequisites:**
 - AWS CLI installed and configured
@@ -86,109 +98,60 @@ The key pair is created by the stack and stored automatically in AWS SSM Paramet
 
 ---
 
-#### Linux (Ubuntu 22.04 LTS)
-
-**Deploy - Windows (PowerShell)**
-
-> **Note:** Windows may block unsigned scripts. Use the `-ExecutionPolicy Bypass` flag:
+### Track 1B - Linux (Puppet)
 
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File track2-python\deploy-track2-linux.ps1
+powershell.exe -ExecutionPolicy Bypass -File track1-puppet\deploy-track1-linux.ps1
 ```
 
 Optional parameters:
 ```powershell
-powershell.exe -ExecutionPolicy Bypass -File track2-python\deploy-track2-linux.ps1 -StackName my-stack -Region us-east-1
+... -StackName my-stack -Region us-east-1
 ```
 
-**Deploy - Linux / macOS (Bash)**
-
-> **Note:** After cloning, make scripts executable first:
-
-```bash
-chmod +x track2-python/*.sh
-```
-
-Then deploy:
-
-```bash
-./track2-python/deploy-track2-linux.sh
-```
-
-Optional parameters:
-```bash
-./track2-python/deploy-track2-linux.sh my-stack us-east-1
-```
-
-Both scripts handle the full deploy flow automatically:
-
+The deploy script handles the full flow automatically:
 1. Validate AWS session
 2. Detect your public IP and lock the security group to it
 3. Deploy the CloudFormation stack
 4. Retrieve stack outputs
 5. Pull the private key from SSM Parameter Store
 6. Set correct key file permissions
-7. Print the Jenkins URL and SSH command
+7. Print Jenkins URL and SSH command
 
-**Cleanup - Windows (PowerShell)**
+---
 
+### Track 1A - Windows (Puppet + DSC)
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File track1-puppet\deploy-track1-windows.ps1
+```
+
+The deploy script polls for the Administrator RDP password and decrypts it using the private key. Credentials are printed to the console once available — allow 4-10 minutes after stack creation.
+
+> **Note:** The CloudFormation stack creates a named IAM role. The `CAPABILITY_NAMED_IAM` flag is required and passed automatically by the deploy script.
+
+---
+
+### Track 2 - Linux (Pure Python)
+
+**Deploy - Windows (PowerShell):**
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File track2-python\deploy-track2-linux.ps1
+```
+
+**Deploy - Linux / macOS (Bash):**
+```bash
+chmod +x track2-python/*.sh
+./track2-python/deploy-track2-linux.sh
+```
+
+**Cleanup:**
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File track2-python\cleanup-track2-linux.ps1
 ```
-
-**Cleanup - Linux / macOS (Bash)**
-
 ```bash
 ./track2-python/cleanup-track2-linux.sh
 ```
-
-Cleanup deletes the stack, waits for full deletion, and removes the local `jenkins-demo.pem` file.
-
----
-
-#### Local Configuration
-
-To use a custom AWS profile or region, copy the deploy or cleanup script and modify locally:
-
-```powershell
-Copy-Item track2-python\deploy-track2-linux.ps1 track2-python\deploy-track2-linux-local.ps1
-Copy-Item track2-python\cleanup-track2-linux.ps1 track2-python\cleanup-track2-linux-local.ps1
-```
-
-```bash
-cp track2-python/deploy-track2-linux.sh track2-python/deploy-track2-linux-local.sh
-cp track2-python/cleanup-track2-linux.sh track2-python/cleanup-track2-linux-local.sh
-```
-
-Local variants are excluded from version control via `.gitignore`.
-
----
-
-#### Windows (Windows Server 2022)
-
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File track2-python\deploy-track2-windows.ps1
-```
-
-> AWS handles the Windows Server license through the AMI. Scripts are also provided for replication in any licensed Windows Server environment.
-
----
-
-## Local Replication (Linux)
-
-Replicate the Linux tracks locally using Vagrant and VirtualBox - no cloud account required.
-
-**Prerequisites:**
-- [Vagrant](https://www.vagrantup.com/downloads)
-- [VirtualBox](https://www.virtualbox.org/wiki/Downloads)
-
-```bash
-git clone https://github.com/zambrano-luis/jenkins-automation.git
-cd jenkins-automation
-vagrant up
-```
-
-Vagrant will provision a clean Ubuntu 22.04 VM and automatically run Track 1B and Track 2. Jenkins will be available at `http://localhost:8000` once provisioning completes.
 
 ---
 
@@ -196,11 +159,17 @@ Vagrant will provision a clean Ubuntu 22.04 VM and automatically run Track 1B an
 
 After any track completes, confirm Jenkins is running on port 8000:
 
+**Linux:**
 ```bash
 curl -I http://localhost:8000
 ```
 
-Expected response: `HTTP/1.1 403 Forbidden` - this confirms Jenkins is running and responding on port 8000. The 403 is expected because Jenkins requires authentication; it is not an error.
+**Windows:**
+```powershell
+(Invoke-WebRequest -Uri "http://localhost:8000" -UseBasicParsing).StatusCode
+```
+
+Expected response: `HTTP 403 Forbidden` — Jenkins is running and requiring authentication. 403 is not an error.
 
 ---
 
@@ -208,13 +177,25 @@ Expected response: `HTTP/1.1 403 Forbidden` - this confirms Jenkins is running a
 
 All tracks are safe to re-run. Each step checks current state before acting:
 
-- Package installations check `dpkg` status before calling apt - skipped if already installed
-- GPG key validated as correct format before re-importing
-- Config file edits check for existing values before writing - skipped if already correct
-- Jenkins service restart only triggered if config was not already at desired state
-- Puppet's declarative model converges to desired state natively
+- **Track 2 (Python):** Explicit guard checks before every step — package installations check `dpkg` status, config edits check for existing values, service restarts only triggered if config changed
+- **Track 1B (Puppet Linux):** Puppet's declarative model converges to desired state natively — resources only apply if current state differs from desired state
+- **Track 1A (Puppet + DSC Windows):** DSC resources use Get/Test/Set pattern. The final `configure_and_start_jenkins` resource checks all conditions in a single test: service running, port 8000 listening, `jenkins.xml` correct, wizard disabled, firewall rule present. Jenkins is only stopped and reconfigured if any one condition fails.
 
-Re-running any script against an already-provisioned system skips all completed steps and exits cleanly in seconds.
+Re-running any script against an already-provisioned system skips all completed steps and exits cleanly.
+
+---
+
+## Windows Track - Known Challenges
+
+The Windows track required significantly more engineering effort than Linux due to platform-specific constraints:
+
+- Jenkins MSI requires `JAVA_HOME` and Java in system `PATH` before the service installer runs — environment variables set mid-session are not inherited by the MSI's service start process
+- `jenkins.exe` is a WinSW service wrapper — the `<executable>` in `jenkins.xml` must point directly to `java.exe`, not back to `jenkins.exe`
+- Setup wizard requires explicit state files (`jenkins.install.InstallUtil.lastExecVersion`) in addition to the `-Djenkins.install.runSetupWizard=false` JVM flag
+- Windows Firewall must be opened separately from the AWS security group
+- DSC sessions run as SYSTEM in isolation — changes made in one DSC resource are not guaranteed to be visible to subsequent resources
+
+These challenges are documented in the assessment presentation (slide 08) as part of the "what I'd do differently" reflection.
 
 ---
 
@@ -236,8 +217,9 @@ Re-running any script against an already-provisioned system skips all completed 
 - Linux tracks assume a Debian-based distribution (Ubuntu 20.04+)
 - Scripts must be run as root (`sudo`) on Linux
 - Windows scripts must be run with `-ExecutionPolicy Bypass` or from an elevated session
-- Internet access is required to download Jenkins packages and the Puppet agent
+- Internet access is required to download Jenkins, Java, and the Puppet agent
 - AWS CLI must be configured with appropriate permissions to deploy CloudFormation stacks
+- AWS deploy scripts default to `us-west-2` — pass `-Region` to override
 
 ---
 
