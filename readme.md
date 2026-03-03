@@ -226,3 +226,311 @@ These challenges are documented in the assessment presentation (slide 08) as par
 ## Author
 
 Luis Zambrano - [github.com/zambrano-luis](https://github.com/zambrano-luis)
+
+---
+
+## Appendix > Windows Lessons Learned
+
+This section documents every issue encountered implementing Track 1A on Windows Server 2022. The Linux track ran cleanly on first attempt. The Windows track required seven distinct debugging cycles. Each issue includes the original assumption, what actually happened, and the specific code change that fixed it.
+
+---
+
+### Why We Switched to DSC
+
+The original Track 1A manifest used the same `exec`-based approach as Linux — wrapping shell commands in Puppet `exec` resources. This worked on Linux but failed on Windows because:
+
+- `exec` on Windows spawns `cmd.exe`, which has different quoting rules, path handling, and environment inheritance than PowerShell
+- Windows package management (MSI) has no clean Puppet native type equivalent
+- Service lifecycle on Windows requires registry and environment state that `exec` cannot manage cleanly
+
+The switch to `puppetlabs-dsc_lite` delegates all Windows operations to **DSC (Desired State Configuration)** — Microsoft's own declarative automation layer. Every resource becomes a `dsc {}` block with three PowerShell scriptblocks: `getscript`, `testscript`, and `setscript`. Puppet calls `testscript` first and only runs `setscript` if the test returns false — exactly how Puppet's native resources work.
+
+**Before (exec-based approach — failed):**
+```puppet
+exec { 'install_jenkins':
+  command  => 'msiexec /i C:\jenkins.msi /qn',
+  provider => 'windows',
+  unless   => 'sc query jenkins',
+}
+```
+
+**After (DSC approach — working):**
+```puppet
+dsc { 'install_jenkins':
+  resource_name => 'Script',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    getscript  => 'return @{ Result = ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null).ToString() }',
+    testscript => 'return ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null)',
+    setscript  => '$r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\jenkins.msi","/qn","/norestart") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Jenkins MSI failed: $($r.ExitCode)" }',
+  },
+  require => Dsc['download_jenkins'],
+}
+```
+
+The bootstrap script (`install_jenkins_puppet_dsc.ps1`) installs the required modules before running the manifest:
+
+```powershell
+puppet module install puppetlabs-dsc_lite
+puppet module install puppetlabs-stdlib
+```
+
+---
+
+### Issue 1 — Puppet Module Version Range Syntax
+
+**Wrong assumption:** Version range syntax from Puppet Forge docs would work in PowerShell.
+
+```powershell
+# BROKE - nested quoting mangled by PowerShell -> Puppet argument parser
+puppet module install puppetlabs-dsc_lite --version "'>= 1.0.0 < 2.0.0'"
+# Error: Unparsable version range: "'>= 1.0.0 < 2.0.0'"
+```
+
+**Fix in `install_jenkins_puppet_dsc.ps1`:** Remove the version constraint entirely.
+
+```powershell
+# WORKS - install latest compatible version
+puppet module install puppetlabs-dsc_lite
+puppet module install puppetlabs-stdlib
+```
+
+---
+
+### Issue 2 — Jenkins MSI Download URL Redirect
+
+**Wrong assumption:** The canonical Jenkins "latest" URL would download the MSI directly.
+
+```puppet
+# BROKE - URL returns HTTP 308, WebClient does not follow 308 redirects
+setscript => '(New-Object System.Net.WebClient).DownloadFile(
+  "https://get.jenkins.io/windows/latest",
+  "C:\\Windows\\Temp\\jenkins.msi")',
+```
+
+The download appeared to succeed but produced a tiny HTML redirect page instead of the MSI.
+
+**Fix in `jenkins-windows.pp`:** Hardcode a direct URL to the specific LTS release and add a size check.
+
+```puppet
+setscript => '(New-Object System.Net.WebClient).DownloadFile(
+  "https://get.jenkins.io/windows-stable/2.528.2/jenkins.msi",
+  "C:\\Windows\\Temp\\jenkins.msi");
+  if ((Get-Item "C:\\Windows\\Temp\\jenkins.msi").Length -lt 1MB) {
+    throw "Jenkins MSI corrupt"
+  }',
+```
+
+---
+
+### Issue 3 — Jenkins MSI Fails at Service Start (Error 1920)
+
+**Wrong assumption:** Setting `$env:Path` or adding Java to the system PATH before calling msiexec would be sufficient for the service to find Java during installation.
+
+```puppet
+# BROKE - PATH set in DSC session, not visible to SCM spawned by MSI
+setscript => '$env:Path = "$env:Path;C:\\Program Files\\Eclipse Adoptium\\...\\bin";
+  Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\jenkins.msi","/qn") -Wait',
+# Error 1920: Service 'Jenkins' (Jenkins) failed to start.
+```
+
+The Jenkins MSI starts the service during installation via the Windows Service Control Manager. The SCM reads system environment at that moment — `$env:Path` changes in the DSC session were not visible to it.
+
+**Fix in `jenkins-windows.pp`:** Add a dedicated `set_java_home` resource that persists `JAVA_HOME` to the registry before the install resource runs. The Jenkins service wrapper reads `JAVA_HOME` — not `PATH` — to locate `java.exe`.
+
+```puppet
+# RESOURCE 3 - Set JAVA_HOME (persisted to registry, visible to SCM)
+dsc { 'set_java_home':
+  resource_name => 'Environment',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    name   => 'JAVA_HOME',
+    value  => 'C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot',
+    ensure => 'present',
+  },
+  require => Dsc['install_java'],
+}
+```
+
+**Also added in `install_jenkins_puppet_dsc.ps1`:** Step 5 now sets both `JAVA_HOME` and `PATH` at the system level before puppet apply runs, ensuring they are available even if the DSC Environment resources haven't run yet on a fresh instance.
+
+```powershell
+$JavaHome = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
+[Environment]::SetEnvironmentVariable("JAVA_HOME", $JavaHome, "Machine")
+[Environment]::SetEnvironmentVariable("Path",
+  [Environment]::GetEnvironmentVariable("Path","Machine") + ";$JavaHome\bin", "Machine")
+```
+
+---
+
+### Issue 4 — DSC Environment Resource Does Not Support `target` Property
+
+**Wrong assumption:** The DSC Environment resource accepted a `target` property to explicitly scope the variable to `Machine` level.
+
+```puppet
+# BROKE - 'target' is not a valid property for this DSC resource version
+dsc { 'set_java_path':
+  properties => {
+    name   => 'Path',
+    value  => 'C:\...\bin',
+    path   => true,
+    target => ['Machine'],   # Error: Undefined property target
+  },
+}
+```
+
+**Fix in `jenkins-windows.pp`:** Remove `target`. DSC Environment resources run as SYSTEM and default to machine scope.
+
+```puppet
+dsc { 'set_java_path':
+  properties => {
+    name   => 'Path',
+    value  => 'C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot\bin',
+    ensure => 'present',
+    path   => true,
+  },
+}
+```
+
+---
+
+### Issue 5 — jenkins.exe Is a Service Wrapper, Not the JVM
+
+**Wrong assumption:** `jenkins.exe` is the Jenkins process — passing JVM flags and `--httpPort` to it would work the same as `java -jar jenkins.war` on Linux.
+
+The event log showed:
+```
+Starting C:\Program Files\Jenkins\jenkins.exe -Xrs -Xmx256m ... --httpPort=8000
+Child process finished with -1
+```
+
+Running it directly confirmed:
+```
+> jenkins.exe --httpPort=8000
+Unknown command: --httpPort=8000
+Available commands: install, uninstall, start, stop, status...
+```
+
+`jenkins.exe` is **WinSW** (Windows Service Wrapper) — a service control shim. It reads `jenkins.xml` to determine what to actually launch. Passing application arguments to it directly fails.
+
+**Fix in `jenkins-windows.pp`:** Change `<executable>` in `jenkins.xml` to point directly to `java.exe`. Move all JVM flags and Jenkins arguments into `<arguments>`.
+
+```puppet
+# setscript in configure_and_start_jenkins now writes:
+$java = "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.11.9-hotspot\\bin\\java.exe"
+$war  = "C:\\Program Files\\Jenkins\\jenkins.war"
+$xml  = "<?xml version=`"1.0`" encoding=`"UTF-8`"?>
+<service>
+  <id>Jenkins</id>
+  <executable>$java</executable>
+  <arguments>-Xrs -Xmx256m -Dhudson.lifecycle=hudson.lifecycle.WindowsServiceLifecycle
+    -jar `"$war`" --httpPort=8000 --webroot=`"%LocalAppData%\Jenkins\war`"
+    -Djenkins.install.runSetupWizard=false</arguments>
+  <logmode>rotate</logmode>
+</service>"
+```
+
+---
+
+### Issue 6 — jenkins.xml Version 1.1 Not Supported
+
+**Wrong assumption:** Writing `<?xml version="1.1"` in a generated `jenkins.xml` would be accepted by the Jenkins service wrapper.
+
+```
+> jenkins.exe status
+The configuration file could not be loaded.
+Version number '1.1' is invalid. Line 1, position 16.
+```
+
+WinSW's embedded XML parser only supports XML version 1.0.
+
+**Fix in `jenkins-windows.pp`:** The `setscript` in `configure_and_start_jenkins` now always writes `version="1.0"` and also patches existing files that may have been written with `1.1`.
+
+```puppet
+# Always write version 1.0 in both new and existing jenkins.xml
+$xml = "<?xml version=`"1.0`" encoding=`"UTF-8`"?>..."
+```
+
+---
+
+### Issue 7 — Setup Wizard Not Disabled by JVM Flag Alone
+
+**Wrong assumption:** `-Djenkins.install.runSetupWizard=false` in the JVM arguments would fully disable the setup wizard.
+
+Jenkins showed the unlock screen despite the flag being present in `jenkins.xml`. Jenkins checks for install state files in `JENKINS_HOME` to determine whether initial setup has been completed. If the files are absent it shows the wizard regardless of the JVM flag.
+
+**Fix in `jenkins-windows.pp`:** The `setscript` in `configure_and_start_jenkins` now creates both required state files in the Jenkins home directory.
+
+```puppet
+$d = "C:\\Windows\\system32\\config\\systemprofile\\.jenkins"
+if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force }
+Set-Content -Path "$d\jenkins.install.InstallUtil.lastExecVersion" -Value "2.528.2"
+Set-Content -Path "$d\jenkins.install.UpgradeWizard.state" -Value "2.528.2"
+```
+
+The `testscript` also checks for the presence of these files so the resource re-runs if they are ever deleted.
+
+---
+
+### Issue 8 — Windows Firewall Blocking External Access
+
+**Wrong assumption:** Opening port 8000 in the AWS security group was sufficient for external access, same as Linux.
+
+Jenkins was confirmed running (`netstat -an` showed `0.0.0.0:8000 LISTENING`) and the AWS security group had the correct inbound rule — but external connections timed out. Windows Server 2022 has Windows Firewall enabled by default. The AWS security group operates at the hypervisor layer; Windows Firewall operates independently at the OS layer. Both must allow the traffic.
+
+**Fix in `jenkins-windows.pp`:** The `setscript` in `configure_and_start_jenkins` creates a firewall rule if it does not already exist. The `testscript` checks for it as one of the five conditions that must all be true before Puppet considers the resource satisfied.
+
+```puppet
+# In testscript - firewall check is one of five conditions
+$fwOk = ((Get-NetFirewallRule -DisplayName "Jenkins-8000" -ErrorAction SilentlyContinue) -ne $null)
+return ($running -and $port -and $xmlOk -and $wizardOk -and $fwOk)
+
+# In setscript - create rule if absent
+if (-not (Get-NetFirewallRule -DisplayName "Jenkins-8000" -ErrorAction SilentlyContinue)) {
+  New-NetFirewallRule -DisplayName "Jenkins-8000" -Direction Inbound `
+    -Protocol TCP -LocalPort 8000 -Action Allow -Profile Any
+}
+```
+
+**Also required in `jenkins-windows-puppet.yaml`:** The CloudFormation template's security group opens port 8000 at the AWS network layer. This is a prerequisite — the Windows Firewall rule handles the OS layer.
+
+```yaml
+SecurityGroupIngress:
+  - IpProtocol: tcp
+    FromPort: 8000
+    ToPort: 8000
+    CidrIp: !Sub "${DeployerIP}/32"
+    Description: Jenkins UI - deployer IP only
+```
+
+---
+
+### Final State of `configure_and_start_jenkins`
+
+After all fixes, the seventh and final resource in `jenkins-windows.pp` consolidates all configuration and runtime checks into a single idempotent resource. The `testscript` checks all five conditions simultaneously — Jenkins only stops and restarts if something is actually wrong.
+
+```puppet
+dsc { 'configure_and_start_jenkins':
+  resource_name => 'Script',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    testscript => '
+      $svc      = (Get-Service jenkins -ErrorAction SilentlyContinue)
+      $running  = ($svc -ne $null -and $svc.Status -eq "Running")
+      $port     = (netstat -an | Select-String ":8000.*LISTENING") -ne $null
+      $p        = "C:\\Program Files\\Jenkins\\jenkins.xml"
+      $xmlOk    = (Test-Path $p) -and
+                  ((Get-Content $p -Raw) -match "--httpPort=8000") -and
+                  ((Get-Content $p -Raw) -match "java.exe") -and
+                  ((Get-Content $p -Raw) -match "runSetupWizard=false")
+      $wizardOk = (Test-Path "C:\\Windows\\system32\\config\\systemprofile\\.jenkins\\jenkins.install.InstallUtil.lastExecVersion")
+      $fwOk     = ((Get-NetFirewallRule -DisplayName "Jenkins-8000" -ErrorAction SilentlyContinue) -ne $null)
+      return ($running -and $port -and $xmlOk -and $wizardOk -and $fwOk)
+    ',
+    # setscript: stop service, rewrite jenkins.xml, create wizard files,
+    #            add firewall rule, start service
+  },
+  require => Dsc['install_jenkins'],
+}
+```
+
