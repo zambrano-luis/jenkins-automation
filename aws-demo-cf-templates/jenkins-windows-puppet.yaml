@@ -123,10 +123,10 @@ Resources:
           Start-Transcript -Path $logFile -Append
 
           Write-Host "==> Downloading Puppet bootstrap script from GitHub..."
-          Invoke-WebRequest -Uri "${ScriptURL}" -OutFile "C:\install_jenkins_puppet.ps1" -UseBasicParsing
+          Invoke-WebRequest -Uri "${ScriptURL}" -OutFile "C:\install_jenkins_puppet_dsc.ps1" -UseBasicParsing
 
           Write-Host "==> Running Puppet bootstrap..."
-          powershell.exe -ExecutionPolicy Bypass -File "C:\install_jenkins_puppet.ps1"
+          powershell.exe -ExecutionPolicy Bypass -File "C:\install_jenkins_puppet_dsc.ps1"
 
           Write-Host "==> Bootstrap complete. Jenkins is running on port 8000."
           Stop-Transcript
