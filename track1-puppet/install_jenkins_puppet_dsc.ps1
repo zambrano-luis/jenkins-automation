@@ -11,7 +11,6 @@ $PuppetVersion  = "8.10.0"
 $PuppetMsiUrl   = "https://downloads.puppet.com/windows/puppet8/puppet-agent-$PuppetVersion-x64.msi"
 $PuppetMsiPath  = "C:\Windows\Temp\puppet-agent.msi"
 $PuppetBin      = "C:\Program Files\Puppet Labs\Puppet\bin"
-$ManifestPath   = "$PSScriptRoot\jenkins-windows.pp"
 
 function Write-Step($n, $total, $msg) {
     Write-Host ""
@@ -27,7 +26,7 @@ function Write-Done($msg) {
 }
 
 # --- Step 1: Check / Install Puppet ------------------------------------------
-Write-Step 1 4 "Puppet Agent"
+Write-Step 1 6 "Puppet Agent"
 
 $puppetExe = "$PuppetBin\puppet.bat"
 if (Test-Path $puppetExe) {
@@ -51,20 +50,20 @@ if ($env:PATH -notlike "*Puppet Labs*") {
 }
 
 # --- Step 2: Install puppetlabs-dsc_lite -------------------------------------
-Write-Step 2 4 "puppetlabs-dsc_lite module"
+Write-Step 2 6 "puppetlabs-dsc_lite module"
 
 $moduleCheck = & "$puppetExe" module list 2>&1 | Select-String "dsc_lite"
 if ($moduleCheck) {
     Write-Skip "puppetlabs-dsc_lite"
 } else {
     Write-Host "    Installing puppetlabs-dsc_lite..." -ForegroundColor Yellow
-    & "$puppetExe" module install puppetlabs-dsc_lite --version "'>= 1.0.0 < 2.0.0'"
+    & "$puppetExe" module install puppetlabs-dsc_lite
     if ($LASTEXITCODE -ne 0) { throw "Module install failed" }
     Write-Done "puppetlabs-dsc_lite installed"
 }
 
 # --- Step 3: Install puppetlabs-stdlib (dsc_lite dependency) ----------------
-Write-Step 3 4 "puppetlabs-stdlib module"
+Write-Step 3 6 "puppetlabs-stdlib module"
 
 $stdlibCheck = & "$puppetExe" module list 2>&1 | Select-String "stdlib"
 if ($stdlibCheck) {
@@ -76,8 +75,38 @@ if ($stdlibCheck) {
     Write-Done "puppetlabs-stdlib installed"
 }
 
-# --- Step 4: Apply manifest --------------------------------------------------
-Write-Step 4 4 "puppet apply $ManifestPath"
+# --- Step 4: Download manifest -----------------------------------------------
+Write-Step 4 6 "Downloading Jenkins manifest"
+
+$ManifestUrl  = "https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/manifests/jenkins-windows.pp"
+$ManifestPath = "C:\jenkins-windows.pp"
+
+if (Test-Path $ManifestPath) {
+    Write-Skip "Manifest already present at $ManifestPath"
+} else {
+    Write-Host "    Downloading jenkins-windows.pp..." -ForegroundColor Yellow
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $ManifestUrl -OutFile $ManifestPath -UseBasicParsing
+    if (-not (Test-Path $ManifestPath)) { throw "Manifest download failed" }
+    Write-Done "Manifest saved to $ManifestPath"
+}
+
+# --- Step 5: Set Java in system PATH -----------------------------------------
+Write-Step 5 6 "Setting Java in system PATH"
+
+$JavaBin  = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot\bin"
+$SysPath  = [Environment]::GetEnvironmentVariable("Path", "Machine")
+
+if ($SysPath -like "*Adoptium*") {
+    Write-Skip "Java already in system PATH"
+} else {
+    [Environment]::SetEnvironmentVariable("Path", "$SysPath;$JavaBin", "Machine")
+    $env:Path = "$env:Path;$JavaBin"
+    Write-Done "Java added to system PATH"
+}
+
+# --- Step 6: Apply manifest --------------------------------------------------
+Write-Step 6 6 "puppet apply $ManifestPath"
 
 if (-not (Test-Path $ManifestPath)) {
     throw "Manifest not found at $ManifestPath"
