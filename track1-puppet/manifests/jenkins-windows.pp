@@ -38,19 +38,32 @@ dsc { 'download_jenkins':
   require => Dsc['install_java'],
 }
 
-# RESOURCE 4 - Install Jenkins
+# RESOURCE 4 - Add Java to system PATH
+dsc { 'set_java_path':
+  resource_name => 'Environment',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    name   => 'Path',
+    value  => 'C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot\bin',
+    ensure => 'present',
+    path   => true,
+  },
+  require => Dsc['install_java'],
+}
+
+# RESOURCE 5 - Install Jenkins
 dsc { 'install_jenkins':
   resource_name => 'Script',
   module        => 'PSDesiredStateConfiguration',
   properties    => {
     getscript  => 'return @{ Result = ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null).ToString() }',
     testscript => 'return ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null)',
-    setscript  => '$javaPath = "C:\\Program Files\\Eclipse Adoptium\\jdk-17.0.11.9-hotspot\\bin"; $syspath = [Environment]::GetEnvironmentVariable("Path","Machine"); if ($syspath -notlike "*Adoptium*") { [Environment]::SetEnvironmentVariable("Path","$syspath;$javaPath","Machine") }; $env:Path = "$env:Path;$javaPath"; $r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\jenkins.msi","/qn","/norestart","PORT=8000","JENKINSDIR=C:\\Program Files\\Jenkins") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Jenkins MSI failed: $($r.ExitCode)" }',
+    setscript  => '$r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\jenkins.msi","/qn","/norestart","PORT=8000","JENKINSDIR=C:\\Program Files\\Jenkins","STARTTYPE=manual") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Jenkins MSI failed: $($r.ExitCode)" }',
   },
-  require => Dsc['download_jenkins'],
+  require => Dsc['set_java_path'],
 }
 
-# RESOURCE 5 - Stop Jenkins before config changes
+# RESOURCE 6 - Stop Jenkins before config changes
 dsc { 'jenkins_stopped_for_config':
   resource_name => 'Service',
   module        => 'PSDesiredStateConfiguration',

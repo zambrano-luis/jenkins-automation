@@ -26,7 +26,7 @@ function Write-Done($msg) {
 }
 
 # --- Step 1: Check / Install Puppet ------------------------------------------
-Write-Step 1 5 "Puppet Agent"
+Write-Step 1 6 "Puppet Agent"
 
 $puppetExe = "$PuppetBin\puppet.bat"
 if (Test-Path $puppetExe) {
@@ -50,7 +50,7 @@ if ($env:PATH -notlike "*Puppet Labs*") {
 }
 
 # --- Step 2: Install puppetlabs-dsc_lite -------------------------------------
-Write-Step 2 5 "puppetlabs-dsc_lite module"
+Write-Step 2 6 "puppetlabs-dsc_lite module"
 
 $moduleCheck = & "$puppetExe" module list 2>&1 | Select-String "dsc_lite"
 if ($moduleCheck) {
@@ -63,7 +63,7 @@ if ($moduleCheck) {
 }
 
 # --- Step 3: Install puppetlabs-stdlib (dsc_lite dependency) ----------------
-Write-Step 3 5 "puppetlabs-stdlib module"
+Write-Step 3 6 "puppetlabs-stdlib module"
 
 $stdlibCheck = & "$puppetExe" module list 2>&1 | Select-String "stdlib"
 if ($stdlibCheck) {
@@ -76,7 +76,7 @@ if ($stdlibCheck) {
 }
 
 # --- Step 4: Download manifest -----------------------------------------------
-Write-Step 4 5 "Downloading Jenkins manifest"
+Write-Step 4 6 "Downloading Jenkins manifest"
 
 $ManifestUrl  = "https://raw.githubusercontent.com/zambrano-luis/jenkins-automation/main/track1-puppet/manifests/jenkins-windows.pp"
 $ManifestPath = "C:\jenkins-windows.pp"
@@ -91,8 +91,22 @@ if (Test-Path $ManifestPath) {
     Write-Done "Manifest saved to $ManifestPath"
 }
 
-# --- Step 5: Apply manifest --------------------------------------------------
-Write-Step 5 5 "puppet apply $ManifestPath"
+# --- Step 5: Set Java in system PATH -----------------------------------------
+Write-Step 5 6 "Setting Java in system PATH"
+
+$JavaBin  = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot\bin"
+$SysPath  = [Environment]::GetEnvironmentVariable("Path", "Machine")
+
+if ($SysPath -like "*Adoptium*") {
+    Write-Skip "Java already in system PATH"
+} else {
+    [Environment]::SetEnvironmentVariable("Path", "$SysPath;$JavaBin", "Machine")
+    $env:Path = "$env:Path;$JavaBin"
+    Write-Done "Java added to system PATH"
+}
+
+# --- Step 6: Apply manifest --------------------------------------------------
+Write-Step 6 6 "puppet apply $ManifestPath"
 
 if (-not (Test-Path $ManifestPath)) {
     throw "Manifest not found at $ManifestPath"
