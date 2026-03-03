@@ -85,14 +85,14 @@ dsc { 'jenkins_stopped_for_config':
   require => Dsc['install_jenkins'],
 }
 
-# RESOURCE 8 - Configure jenkins.xml (port 8000 + disable wizard)
+# RESOURCE 8 - Configure jenkins.xml (port 8000 + disable wizard, create if missing)
 dsc { 'configure_jenkins_xml':
   resource_name => 'Script',
   module        => 'PSDesiredStateConfiguration',
   properties    => {
-    getscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return @{ Result = (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false")).ToString() }',
-    testscript => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false"))',
-    setscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; $newArgs = "-Xrs -Xmx256m -Dhudson.lifecycle=hudson.lifecycle.WindowsServiceLifecycle -jar \"C:\\Program Files\\Jenkins\\jenkins.war\" --httpPort=8000 --webroot=\"%LocalAppData%\\Jenkins\\war\" -Djenkins.install.runSetupWizard=false"; $xml = $xml -replace "(?s)<arguments>.*?</arguments>","<arguments>$newArgs</arguments>"; Set-Content -Path "C:\\Program Files\\Jenkins\\jenkins.xml" -Value $xml -Encoding UTF8',
+    getscript  => '$p = "C:\\Program Files\\Jenkins\\jenkins.xml"; if (-not (Test-Path $p)) { return @{ Result = "False" } }; $xml = Get-Content $p -Raw; return @{ Result = (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false")).ToString() }',
+    testscript => '$p = "C:\\Program Files\\Jenkins\\jenkins.xml"; if (-not (Test-Path $p)) { return $false }; $xml = Get-Content $p -Raw; return (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false"))',
+    setscript  => '$p = "C:\\Program Files\\Jenkins\\jenkins.xml"; $newArgs = "-Xrs -Xmx256m -Dhudson.lifecycle=hudson.lifecycle.WindowsServiceLifecycle -jar `"C:\\Program Files\\Jenkins\\jenkins.war`" --httpPort=8000 --webroot=`"%LocalAppData%\\Jenkins\\war`" -Djenkins.install.runSetupWizard=false"; if (Test-Path $p) { $xml = Get-Content $p -Raw; $xml = $xml -replace "(?s)<arguments>.*?</arguments>","<arguments>$newArgs</arguments>"; Set-Content -Path $p -Value $xml -Encoding UTF8 } else { $template = "<?xml version=`"1.1`" encoding=`"UTF-8`"?>`r`n<service>`r`n  <id>Jenkins</id>`r`n  <name>Jenkins</name>`r`n  <description>Jenkins Automation Server</description>`r`n  <executable>%BASE%\\jenkins.exe</executable>`r`n  <arguments>$newArgs</arguments>`r`n  <logmode>rotate</logmode>`r`n</service>"; Set-Content -Path $p -Value $template -Encoding UTF8 }',
   },
   require => Dsc['jenkins_stopped_for_config'],
 }
