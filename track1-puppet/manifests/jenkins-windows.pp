@@ -38,7 +38,19 @@ dsc { 'download_jenkins':
   require => Dsc['install_java'],
 }
 
-# RESOURCE 4 - Add Java to system PATH
+# RESOURCE 4 - Set JAVA_HOME system environment variable
+dsc { 'set_java_home':
+  resource_name => 'Environment',
+  module        => 'PSDesiredStateConfiguration',
+  properties    => {
+    name   => 'JAVA_HOME',
+    value  => 'C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot',
+    ensure => 'present',
+  },
+  require => Dsc['install_java'],
+}
+
+# RESOURCE 5 - Add Java bin to system PATH
 dsc { 'set_java_path':
   resource_name => 'Environment',
   module        => 'PSDesiredStateConfiguration',
@@ -48,22 +60,21 @@ dsc { 'set_java_path':
     ensure => 'present',
     path   => true,
   },
-  require => Dsc['install_java'],
+  require => Dsc['set_java_home'],
 }
 
-# RESOURCE 5 - Install Jenkins
+# RESOURCE 6 - Install Jenkins
 dsc { 'install_jenkins':
   resource_name => 'Script',
   module        => 'PSDesiredStateConfiguration',
   properties    => {
     getscript  => 'return @{ Result = ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null).ToString() }',
     testscript => 'return ((Get-Service -Name jenkins -ErrorAction SilentlyContinue) -ne $null)',
-    setscript  => '$r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\jenkins.msi","/qn","/norestart","PORT=8000","JENKINSDIR=C:\\Program Files\\Jenkins","STARTTYPE=manual") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Jenkins MSI failed: $($r.ExitCode)" }',
+    setscript  => '$r = Start-Process msiexec.exe -ArgumentList @("/i","C:\\Windows\\Temp\\jenkins.msi","/qn","/norestart") -Wait -PassThru; if ($r.ExitCode -notin @(0,1641,3010)) { throw "Jenkins MSI failed: $($r.ExitCode)" }',
   },
   require => Dsc['set_java_path'],
 }
-
-# RESOURCE 6 - Stop Jenkins before config changes
+# RESOURCE 7 - Stop Jenkins before config changes
 dsc { 'jenkins_stopped_for_config':
   resource_name => 'Service',
   module        => 'PSDesiredStateConfiguration',
@@ -74,7 +85,7 @@ dsc { 'jenkins_stopped_for_config':
   require => Dsc['install_jenkins'],
 }
 
-# RESOURCE 6 - Disable setup wizard in jenkins.xml
+# RESOURCE 8 - Disable setup wizard in jenkins.xml
 dsc { 'configure_jenkins_xml':
   resource_name => 'Script',
   module        => 'PSDesiredStateConfiguration',
@@ -86,7 +97,7 @@ dsc { 'configure_jenkins_xml':
   require => Dsc['jenkins_stopped_for_config'],
 }
 
-# RESOURCE 7 - Ensure Jenkins is running
+# RESOURCE 9 - Ensure Jenkins is running
 dsc { 'jenkins_running':
   resource_name => 'Service',
   module        => 'PSDesiredStateConfiguration',
