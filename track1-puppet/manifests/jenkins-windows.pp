@@ -85,14 +85,14 @@ dsc { 'jenkins_stopped_for_config':
   require => Dsc['install_jenkins'],
 }
 
-# RESOURCE 8 - Disable setup wizard in jenkins.xml
+# RESOURCE 8 - Configure jenkins.xml (port 8000 + disable wizard)
 dsc { 'configure_jenkins_xml':
   resource_name => 'Script',
   module        => 'PSDesiredStateConfiguration',
   properties    => {
-    getscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return @{ Result = ($xml -match "runSetupWizard=false").ToString() }',
-    testscript => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return ($xml -match "runSetupWizard=false")',
-    setscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; if ($xml -notmatch "runSetupWizard=false") { $xml = $xml -replace "(<arguments>[^<]+)(</arguments>)","$1 -Djenkins.install.runSetupWizard=false`$2" }; Set-Content -Path "C:\\Program Files\\Jenkins\\jenkins.xml" -Value $xml -Encoding UTF8',
+    getscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return @{ Result = (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false")).ToString() }',
+    testscript => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; return (($xml -match "--httpPort=8000") -and ($xml -match "runSetupWizard=false"))',
+    setscript  => '$xml = Get-Content "C:\\Program Files\\Jenkins\\jenkins.xml" -Raw; $newArgs = "-Xrs -Xmx256m -Dhudson.lifecycle=hudson.lifecycle.WindowsServiceLifecycle -jar \"C:\\Program Files\\Jenkins\\jenkins.war\" --httpPort=8000 --webroot=\"%LocalAppData%\\Jenkins\\war\" -Djenkins.install.runSetupWizard=false"; $xml = $xml -replace "(?s)<arguments>.*?</arguments>","<arguments>$newArgs</arguments>"; Set-Content -Path "C:\\Program Files\\Jenkins\\jenkins.xml" -Value $xml -Encoding UTF8',
   },
   require => Dsc['jenkins_stopped_for_config'],
 }
