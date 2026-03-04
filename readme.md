@@ -62,11 +62,11 @@ sudo python3 track1-puppet/install_jenkins_puppet.py
 
 ### Track 1A - PowerShell + Puppet + DSC (Windows)
 
-The PowerShell bootstrap installs Puppet agent, installs `puppetlabs-dsc_lite` and `puppetlabs-stdlib`, sets `JAVA_HOME` and `PATH` for Java, downloads the manifest, then runs `puppet apply`. The manifest delegates all Windows-native operations to DSC resources — no exec blocks.
+The PowerShell bootstrap installs Puppet agent, installs `puppetlabs-dsc_lite` and `puppetlabs-stdlib`, sets `JAVA_HOME` and `PATH` for Java, downloads the manifest, then runs `puppet apply`. The manifest delegates all Windows-native operations to DSC resources (no exec blocks).
 
 **Validated on:** Windows Server 2022, AWS EC2 t3.medium
 
-> **Note:** The Windows manifest uses DSC resources and diverges significantly from the Linux manifest. Windows requires explicit Java path management, MSI-based package installation, service wrapper configuration, and Windows Firewall rules. A shared cross-OS manifest was attempted but proved impractical — the bootstraps differ, the package managers differ, and the config file paths differ.
+> **Note:** The Windows manifest uses DSC resources and diverges significantly from the Linux manifest. Windows requires explicit Java path management, MSI-based package installation, service wrapper configuration, and Windows Firewall rules. A shared cross-OS manifest was attempted but proved impractical: the bootstraps differ, the package managers differ, and the config file paths differ.
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File track1-puppet\install_jenkins_puppet_dsc.ps1
@@ -126,7 +126,7 @@ The deploy script handles the full flow automatically:
 powershell.exe -ExecutionPolicy Bypass -File track1-puppet\deploy-track1-windows.ps1
 ```
 
-The deploy script polls for the Administrator RDP password and decrypts it using the private key. Credentials are printed to the console once available — allow 4-10 minutes after stack creation.
+The deploy script polls for the Administrator RDP password and decrypts it using the private key. Credentials are printed to the console once available. Allow 4-10 minutes after stack creation.
 
 > **Note:** The CloudFormation stack creates a named IAM role. The `CAPABILITY_NAMED_IAM` flag is required and passed automatically by the deploy script.
 
@@ -169,7 +169,7 @@ curl -I http://localhost:8000
 (Invoke-WebRequest -Uri "http://localhost:8000" -UseBasicParsing).StatusCode
 ```
 
-Expected response: `HTTP 403 Forbidden` — Jenkins is running and requiring authentication. 403 is not an error.
+Expected response: `HTTP 403 Forbidden`. Jenkins is running and requiring authentication. 403 is not an error.
 
 ---
 
@@ -177,8 +177,8 @@ Expected response: `HTTP 403 Forbidden` — Jenkins is running and requiring aut
 
 All tracks are safe to re-run. Each step checks current state before acting:
 
-- **Track 2 (Python):** Explicit guard checks before every step — package installations check `dpkg` status, config edits check for existing values, service restarts only triggered if config changed
-- **Track 1B (Puppet Linux):** Puppet's declarative model converges to desired state natively — resources only apply if current state differs from desired state
+- **Track 2 (Python):** Explicit guard checks before every step. Package installations check `dpkg` status, config edits check for existing values, service restarts only triggered if config changed
+- **Track 1B (Puppet Linux):** Puppet's declarative model converges to desired state natively. Resources only apply if current state differs from desired state
 - **Track 1A (Puppet + DSC Windows):** DSC resources use Get/Test/Set pattern. The final `configure_and_start_jenkins` resource checks all conditions in a single test: service running, port 8000 listening, `jenkins.xml` correct, wizard disabled, firewall rule present. Jenkins is only stopped and reconfigured if any one condition fails.
 
 Re-running any script against an already-provisioned system skips all completed steps and exits cleanly.
@@ -189,11 +189,11 @@ Re-running any script against an already-provisioned system skips all completed 
 
 The Windows track required significantly more engineering effort than Linux due to platform-specific constraints:
 
-- Jenkins MSI requires `JAVA_HOME` and Java in system `PATH` before the service installer runs — environment variables set mid-session are not inherited by the MSI's service start process
-- `jenkins.exe` is a WinSW service wrapper — the `<executable>` in `jenkins.xml` must point directly to `java.exe`, not back to `jenkins.exe`
+- Jenkins MSI requires `JAVA_HOME` and Java in system `PATH` before the service installer runs. Environment variables set mid-session are not inherited by the MSI's service start process
+- `jenkins.exe` is a WinSW service wrapper. The `<executable>` in `jenkins.xml` must point directly to `java.exe`, not back to `jenkins.exe`
 - Setup wizard requires explicit state files (`jenkins.install.InstallUtil.lastExecVersion`) in addition to the `-Djenkins.install.runSetupWizard=false` JVM flag
 - Windows Firewall must be opened separately from the AWS security group
-- DSC sessions run as SYSTEM in isolation — changes made in one DSC resource are not guaranteed to be visible to subsequent resources
+- DSC sessions run as SYSTEM in isolation. Changes made in one DSC resource are not guaranteed to be visible to subsequent resources
 
 These challenges are documented in the assessment presentation (slide 08) as part of the "what I'd do differently" reflection.
 
@@ -219,7 +219,7 @@ These challenges are documented in the assessment presentation (slide 08) as par
 - Windows scripts must be run with `-ExecutionPolicy Bypass` or from an elevated session
 - Internet access is required to download Jenkins, Java, and the Puppet agent
 - AWS CLI must be configured with appropriate permissions to deploy CloudFormation stacks
-- AWS deploy scripts default to `us-west-2` — pass `-Region` to override
+- AWS deploy scripts default to `us-west-2`. Pass `-Region` to override
 
 ---
 
@@ -229,7 +229,7 @@ Luis Zambrano - [github.com/zambrano-luis](https://github.com/zambrano-luis)
 
 ---
 
-## Appendix > Windows Lessons Learned
+## Windows Lessons Learned
 
 This section documents every issue encountered implementing Track 1A on Windows Server 2022. The Linux track ran cleanly on first attempt. The Windows track required seven distinct debugging cycles. Each issue includes the original assumption, what actually happened, and the specific code change that fixed it.
 
@@ -237,15 +237,15 @@ This section documents every issue encountered implementing Track 1A on Windows 
 
 ### Why We Switched to DSC
 
-The original Track 1A manifest used the same `exec`-based approach as Linux — wrapping shell commands in Puppet `exec` resources. This worked on Linux but failed on Windows because:
+The original Track 1A manifest used the same `exec`-based approach as Linux, wrapping shell commands in Puppet `exec` resources. This worked on Linux but failed on Windows because:
 
 - `exec` on Windows spawns `cmd.exe`, which has different quoting rules, path handling, and environment inheritance than PowerShell
 - Windows package management (MSI) has no clean Puppet native type equivalent
 - Service lifecycle on Windows requires registry and environment state that `exec` cannot manage cleanly
 
-The switch to `puppetlabs-dsc_lite` delegates all Windows operations to **DSC (Desired State Configuration)** — Microsoft's own declarative automation layer. Every resource becomes a `dsc {}` block with three PowerShell scriptblocks: `getscript`, `testscript`, and `setscript`. Puppet calls `testscript` first and only runs `setscript` if the test returns false — exactly how Puppet's native resources work.
+The switch to `puppetlabs-dsc_lite` delegates all Windows operations to **DSC (Desired State Configuration),** Microsoft's own declarative automation layer. Every resource becomes a `dsc {}` block with three PowerShell scriptblocks: `getscript`, `testscript`, and `setscript`. Puppet calls `testscript` first and only runs `setscript` if the test returns false, exactly how Puppet's native resources work.
 
-**Before (exec-based approach — failed):**
+**Before (exec-based approach, failed):**
 ```puppet
 exec { 'install_jenkins':
   command  => 'msiexec /i C:\jenkins.msi /qn',
@@ -254,7 +254,7 @@ exec { 'install_jenkins':
 }
 ```
 
-**After (DSC approach — working):**
+**After (DSC approach, working):**
 ```puppet
 dsc { 'install_jenkins':
   resource_name => 'Script',
@@ -277,7 +277,7 @@ puppet module install puppetlabs-stdlib
 
 ---
 
-### Issue 1 — Puppet Module Version Range Syntax
+### Issue 1: Puppet Module Version Range Syntax
 
 **Wrong assumption:** Version range syntax from Puppet Forge docs would work in PowerShell.
 
@@ -297,7 +297,7 @@ puppet module install puppetlabs-stdlib
 
 ---
 
-### Issue 2 — Jenkins MSI Download URL Redirect
+### Issue 2: Jenkins MSI Download URL Redirect
 
 **Wrong assumption:** The canonical Jenkins "latest" URL would download the MSI directly.
 
@@ -323,7 +323,7 @@ setscript => '(New-Object System.Net.WebClient).DownloadFile(
 
 ---
 
-### Issue 3 — Jenkins MSI Fails at Service Start (Error 1920)
+### Issue 3: Jenkins MSI Fails at Service Start (Error 1920)
 
 **Wrong assumption:** Setting `$env:Path` or adding Java to the system PATH before calling msiexec would be sufficient for the service to find Java during installation.
 
@@ -334,9 +334,9 @@ setscript => '$env:Path = "$env:Path;C:\\Program Files\\Eclipse Adoptium\\...\\b
 # Error 1920: Service 'Jenkins' (Jenkins) failed to start.
 ```
 
-The Jenkins MSI starts the service during installation via the Windows Service Control Manager. The SCM reads system environment at that moment — `$env:Path` changes in the DSC session were not visible to it.
+The Jenkins MSI starts the service during installation via the Windows Service Control Manager. The SCM reads system environment at that moment. `$env:Path` changes in the DSC session were not visible to it.
 
-**Fix in `jenkins-windows.pp`:** Add a dedicated `set_java_home` resource that persists `JAVA_HOME` to the registry before the install resource runs. The Jenkins service wrapper reads `JAVA_HOME` — not `PATH` — to locate `java.exe`.
+**Fix in `jenkins-windows.pp`:** Add a dedicated `set_java_home` resource that persists `JAVA_HOME` to the registry before the install resource runs. The Jenkins service wrapper reads `JAVA_HOME` (not `PATH`) to locate `java.exe`.
 
 ```puppet
 # RESOURCE 3 - Set JAVA_HOME (persisted to registry, visible to SCM)
@@ -363,7 +363,7 @@ $JavaHome = "C:\Program Files\Eclipse Adoptium\jdk-17.0.11.9-hotspot"
 
 ---
 
-### Issue 4 — DSC Environment Resource Does Not Support `target` Property
+### Issue 4: DSC Environment Resource Does Not Support `target` Property
 
 **Wrong assumption:** The DSC Environment resource accepted a `target` property to explicitly scope the variable to `Machine` level.
 
@@ -394,9 +394,9 @@ dsc { 'set_java_path':
 
 ---
 
-### Issue 5 — jenkins.exe Is a Service Wrapper, Not the JVM
+### Issue 5: jenkins.exe Is a Service Wrapper, Not the JVM
 
-**Wrong assumption:** `jenkins.exe` is the Jenkins process — passing JVM flags and `--httpPort` to it would work the same as `java -jar jenkins.war` on Linux.
+**Wrong assumption:** `jenkins.exe` is the Jenkins process. Passing JVM flags and `--httpPort` to it would work the same as `java -jar jenkins.war` on Linux.
 
 The event log showed:
 ```
@@ -411,7 +411,7 @@ Unknown command: --httpPort=8000
 Available commands: install, uninstall, start, stop, status...
 ```
 
-`jenkins.exe` is **WinSW** (Windows Service Wrapper) — a service control shim. It reads `jenkins.xml` to determine what to actually launch. Passing application arguments to it directly fails.
+`jenkins.exe` is **WinSW** (Windows Service Wrapper), a service control shim. It reads `jenkins.xml` to determine what to actually launch. Passing application arguments to it directly fails.
 
 **Fix in `jenkins-windows.pp`:** Change `<executable>` in `jenkins.xml` to point directly to `java.exe`. Move all JVM flags and Jenkins arguments into `<arguments>`.
 
@@ -432,7 +432,7 @@ $xml  = "<?xml version=`"1.0`" encoding=`"UTF-8`"?>
 
 ---
 
-### Issue 6 — jenkins.xml Version 1.1 Not Supported
+### Issue 6: jenkins.xml Version 1.1 Not Supported
 
 **Wrong assumption:** Writing `<?xml version="1.1"` in a generated `jenkins.xml` would be accepted by the Jenkins service wrapper.
 
@@ -453,7 +453,7 @@ $xml = "<?xml version=`"1.0`" encoding=`"UTF-8`"?>..."
 
 ---
 
-### Issue 7 — Setup Wizard Not Disabled by JVM Flag Alone
+### Issue 7: Setup Wizard Not Disabled by JVM Flag Alone
 
 **Wrong assumption:** `-Djenkins.install.runSetupWizard=false` in the JVM arguments would fully disable the setup wizard.
 
@@ -472,11 +472,11 @@ The `testscript` also checks for the presence of these files so the resource re-
 
 ---
 
-### Issue 8 — Windows Firewall Blocking External Access
+### Issue 8: Windows Firewall Blocking External Access
 
 **Wrong assumption:** Opening port 8000 in the AWS security group was sufficient for external access, same as Linux.
 
-Jenkins was confirmed running (`netstat -an` showed `0.0.0.0:8000 LISTENING`) and the AWS security group had the correct inbound rule — but external connections timed out. Windows Server 2022 has Windows Firewall enabled by default. The AWS security group operates at the hypervisor layer; Windows Firewall operates independently at the OS layer. Both must allow the traffic.
+Jenkins was confirmed running (`netstat -an` showed `0.0.0.0:8000 LISTENING`) and the AWS security group had the correct inbound rule, but external connections timed out. Windows Server 2022 has Windows Firewall enabled by default. The AWS security group operates at the hypervisor layer; Windows Firewall operates independently at the OS layer. Both must allow the traffic.
 
 **Fix in `jenkins-windows.pp`:** The `setscript` in `configure_and_start_jenkins` creates a firewall rule if it does not already exist. The `testscript` checks for it as one of the five conditions that must all be true before Puppet considers the resource satisfied.
 
@@ -492,7 +492,7 @@ if (-not (Get-NetFirewallRule -DisplayName "Jenkins-8000" -ErrorAction SilentlyC
 }
 ```
 
-**Also required in `jenkins-windows-puppet.yaml`:** The CloudFormation template's security group opens port 8000 at the AWS network layer. This is a prerequisite — the Windows Firewall rule handles the OS layer.
+**Also required in `jenkins-windows-puppet.yaml`:** The CloudFormation template's security group opens port 8000 at the AWS network layer. This is a prerequisite. The Windows Firewall rule handles the OS layer.
 
 ```yaml
 SecurityGroupIngress:
@@ -507,7 +507,7 @@ SecurityGroupIngress:
 
 ### Final State of `configure_and_start_jenkins`
 
-After all fixes, the seventh and final resource in `jenkins-windows.pp` consolidates all configuration and runtime checks into a single idempotent resource. The `testscript` checks all five conditions simultaneously — Jenkins only stops and restarts if something is actually wrong.
+After all fixes, the seventh and final resource in `jenkins-windows.pp` consolidates all configuration and runtime checks into a single idempotent resource. The `testscript` checks all five conditions simultaneously. Jenkins only stops and restarts if something is actually wrong.
 
 ```puppet
 dsc { 'configure_and_start_jenkins':
