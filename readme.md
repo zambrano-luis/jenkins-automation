@@ -4,6 +4,10 @@ Automated installation and configuration of Jenkins CI server across multiple pl
 
 Jenkins is configured to listen natively on **port 8000** in all tracks - not via port forwarding, proxy, or NAT.
 
+Notes: 
+- The Linux .sh cleanup and deploy scripts were generated not tested so while the CloudFormation (.yaml) and the puppet manifest (.pp) will work the scripts to deploy and cleanup may require some monification. 
+
+- These scripts are not made for production or to function at scale. With that in mind I intentionally made the setup script for track1 for windows show the password on terminal. That is not a security practice but for quick testing and remote desktop access it was extremely convenient. 
 ---
 
 ## Requirements
