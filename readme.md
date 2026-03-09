@@ -199,8 +199,6 @@ The Windows track required significantly more engineering effort than Linux due 
 - Windows Firewall must be opened separately from the AWS security group
 - DSC sessions run as SYSTEM in isolation. Changes made in one DSC resource are not guaranteed to be visible to subsequent resources
 
-These challenges are documented in the assessment presentation (slide 08) as part of the "what I'd do differently" reflection.
-
 ---
 
 ## Minimum Requirements
